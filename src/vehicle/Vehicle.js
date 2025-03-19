@@ -27,6 +27,9 @@ export class Vehicle {
     this.length = 4.5;
     this.mass = 1500;
     
+    // Position properties
+    this.spawnPosition = new CANNON.Vec3(0, 0, 0); // Default position
+    
     // Engine properties
     this.maxForce = 1000;
     this.maxBrakeForce = 50;
@@ -48,9 +51,21 @@ export class Vehicle {
   
   /**
    * Initialize the vehicle
+   * @param {TerrainGenerator} terrain - The terrain generator for road information
    * @returns {Promise} Promise that resolves when the vehicle is loaded
    */
-  async init() {
+  async init(terrain) {
+    // Set spawn position on the road
+    if (terrain) {
+      // Get road height from terrain and add a larger buffer to ensure it spawns fully above the road
+      // Increase from 0.35 to 1.0 to ensure car is well above the road
+      const roadHeight = terrain.getRoadHeight() + 1.0;
+      
+      // Position vehicle on the road, away from edges
+      // Add Z offset (25) to place car at the first quarter of the road
+      this.spawnPosition = new CANNON.Vec3(0, roadHeight, 25);
+    }
+    
     // Create physics chassis and vehicle
     this.createPhysicsChassis();
     
@@ -77,10 +92,17 @@ export class Vehicle {
     // Create chassis body
     this.chassisBody = new CANNON.Body({
       mass: this.mass,
-      material: this.physics.tireMaterial
+      material: this.physics.tireMaterial,
+      linearDamping: 0.1,       // Add damping to prevent excessive bouncing
+      angularDamping: 0.1       // Prevent excessive rotation
     });
     this.chassisBody.addShape(chassisShape);
-    this.chassisBody.position.set(0, 2, 0);
+    
+    // Use the spawn position set in the init method
+    this.chassisBody.position.copy(this.spawnPosition);
+    
+    // Set initial rotation to face along the road (z-axis)
+    this.chassisBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), Math.PI);
     
     // Add chassis to the physics world
     this.physics.addBody(this.chassisBody, true);
@@ -89,8 +111,8 @@ export class Vehicle {
     this.vehicle = this.physics.createVehicle(this.chassisBody);
     
     // Configure suspension and wheel properties
-    const suspensionStiffness = 30;
-    const suspensionRestLength = 0.3;
+    const suspensionStiffness = 35;        // Increased from 30
+    const suspensionRestLength = 0.4;      // Increased from 0.3
     const suspensionDamping = 4.4;
     const suspensionCompression = 4.4;
     const rollInfluence = 0.01;
@@ -328,6 +350,9 @@ export class Vehicle {
     let engineForce = 0;
     let brakeForce = 0;
     
+    // Log inputs for debugging
+    console.log('Inputs:', { throttle, brake, reverse, boost });
+    
     // Apply engine force based on throttle and direction
     if (reverse && this.speed < 5) {
       // Reverse
@@ -344,6 +369,9 @@ export class Vehicle {
     
     // Apply brake force
     brakeForce = brake * this.maxBrakeForce;
+    
+    // Log forces for debugging
+    console.log('Forces:', { engineForce, brakeForce });
     
     // Apply forces to wheels
     for (let i = 0; i < 4; i++) {

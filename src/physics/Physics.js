@@ -18,7 +18,7 @@ export class Physics {
     this.world.gravity.set(0, -9.82, 0);
     
     // Configure solver
-    this.world.solver.iterations = 10;
+    this.world.solver.iterations = 20;
     this.world.defaultContactMaterial.friction = 0.05;
     
     // Create material for snow/ice surfaces
@@ -32,7 +32,8 @@ export class Physics {
       {
         friction: 0.15,          // Low friction for slippery snow
         restitution: 0.1,        // Low bounce
-        contactEquationStiffness: 1000
+        contactEquationStiffness: 1000,
+        contactEquationRelaxation: 3
       }
     );
     
@@ -52,6 +53,10 @@ export class Physics {
     
     if (isVehicle) {
       this.vehicleBodies.push(body);
+      
+      // Set collision groups for vehicle
+      body.collisionFilterGroup = 1;
+      body.collisionFilterMask = 1;
     }
     
     return body;
@@ -143,6 +148,10 @@ export class Physics {
     
     // Rotate to match Three.js coordinate system
     heightfieldBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    
+    // Ensure terrain has proper collision detection
+    heightfieldBody.collisionFilterGroup = 1;
+    heightfieldBody.collisionFilterMask = 1;
     
     // Add body to world
     this.addBody(heightfieldBody);

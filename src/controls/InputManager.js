@@ -27,11 +27,25 @@ export class InputManager {
     // Set up key listeners
     window.addEventListener('keydown', (e) => {
       this.keys[e.key.toLowerCase()] = true;
+      // Log key presses for debugging
+      console.log('Key pressed:', e.key.toLowerCase());
     });
     
     window.addEventListener('keyup', (e) => {
       this.keys[e.key.toLowerCase()] = false;
     });
+    
+    // Initialize common keys to prevent undefined checks
+    this.keys['w'] = false;
+    this.keys['a'] = false;
+    this.keys['s'] = false;
+    this.keys['d'] = false;
+    this.keys['arrowup'] = false;
+    this.keys['arrowdown'] = false;
+    this.keys['arrowleft'] = false;
+    this.keys['arrowright'] = false;
+    this.keys['shift'] = false;
+    this.keys[' '] = false;
   }
   
   /**
@@ -50,6 +64,9 @@ export class InputManager {
    * @param {number} deltaTime - Time since last update
    */
   update(deltaTime) {
+    // Clamp deltaTime to avoid huge jumps
+    deltaTime = Math.min(deltaTime, 0.1);
+    
     // Handle steering based on keys
     let targetSteering = 0;
     
@@ -103,16 +120,13 @@ export class InputManager {
    * @returns {Object} Current input state
    */
   getInputs() {
-    // Update inputs before returning
-    this.update(1/60); // Use a default deltaTime if not called from animation loop
-    
     return {
       steering: this.steeringWheel,
       throttle: this.throttle,
       brake: this.brake,
-      handbrake: this.keys[' '] || false,  // Spacebar for handbrake
+      handbrake: Boolean(this.keys[' ']),  // Spacebar for handbrake
       reverse: this.brake > 0.9,           // Full brake to engage reverse
-      boost: this.keys['shift'] || false   // Shift for boost
+      boost: Boolean(this.keys['shift'])   // Shift for boost
     };
   }
 } 

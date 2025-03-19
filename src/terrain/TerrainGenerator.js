@@ -30,10 +30,16 @@ export class TerrainGenerator {
     this.resolution = 64;      // Resolution of the heightmap (reduced for performance)
     this.maxHeight = 6;        // Maximum terrain height
     
+    // Road settings
+    this.roadWidth = this.resolution / 5;  // Make road wider (was /10)
+    this.roadY = this.resolution / 2;      // Road position in the middle
+    this.roadHeight = 0.5;                 // Fixed road height
+    
     // Generation objects
     this.terrain = null;       // Main terrain mesh
     this.heightData = null;    // Height data for physics
     this.snowCovering = null;  // Snow covering mesh
+    this.road = null;          // Road mesh
     
     // Simplified noise generators 
     this.terrainNoise = new SimpleNoise(1);
@@ -70,10 +76,6 @@ export class TerrainGenerator {
       this.heightData[i] = new Array(this.resolution);
     }
     
-    // Define a simple road path in the middle
-    const roadY = this.resolution / 2;
-    const roadWidth = this.resolution / 10;
-    
     // Fill height data using simple noise
     for (let i = 0; i < this.resolution; i++) {
       for (let j = 0; j < this.resolution; j++) {
@@ -84,15 +86,16 @@ export class TerrainGenerator {
         // Get base terrain height from noise
         let height = this.terrainNoise.noise(nx, nz) * this.maxHeight;
         
-        // Flatten area for a simple road
-        const distanceToRoad = Math.abs(j - roadY);
-        if (distanceToRoad < roadWidth) {
-          // Create smooth transition to road
-          const factor = distanceToRoad / roadWidth;
-          height = height * factor * factor;
-          
-          // Ensure road has some minimum height
-          height = Math.max(0.2, height);
+        // Flatten area for road
+        const distanceToRoad = Math.abs(j - this.roadY);
+        if (distanceToRoad < this.roadWidth) {
+          // Set fixed road height
+          height = this.roadHeight;
+        } else if (distanceToRoad < this.roadWidth * 1.5) {
+          // Create smooth transition from road to terrain
+          const transitionWidth = this.roadWidth * 0.5;
+          const factor = (distanceToRoad - this.roadWidth) / transitionWidth;
+          height = this.roadHeight + (height - this.roadHeight) * factor * factor;
         }
         
         // Add edge falloff
@@ -154,6 +157,9 @@ export class TerrainGenerator {
     
     // Add to scene
     this.scene.add(this.terrain);
+    
+    // Create a separate road mesh
+    this.createRoadMesh();
   }
   
   /**
@@ -213,5 +219,118 @@ export class TerrainGenerator {
       maxHeight: this.maxHeight,
       minHeight: 0
     });
+    
+    // Create a specific collision body for the road
+    this.createRoadPhysics();
+  }
+  
+  /**
+   * Create a dedicated physics body for the road to ensure solid collision
+   */
+  createRoadPhysics() {
+    // Road dimensions (match with visual road)
+    const roadLength = this.size;
+    const roadWidth = (this.roadWidth * 2) * (this.size / this.resolution);
+    
+    // Create a box shape for the road
+    const roadShape = new CANNON.Box(new CANNON.Vec3(
+      roadWidth / 2,    // half width 
+      0.1,              // half height (thickness)
+      roadLength / 2    // half length
+    ));
+    
+    // Create road body
+    const roadBody = new CANNON.Body({
+      mass: 0,  // Static body
+      material: this.physics.snowMaterial,
+      type: CANNON.Body.STATIC
+    });
+    
+    // Add shape to body
+    roadBody.addShape(roadShape);
+    
+    // Position the road at the same place as the visual road
+    roadBody.position.set(0, this.roadHeight, 0);
+    
+    // Add body to physics world
+    this.physics.addBody(roadBody);
+  }
+  
+  /**
+   * Create a visible road mesh on top of the terrain
+   */
+  createRoadMesh() {
+    // Road dimensions
+    const roadLength = this.size;
+    const roadWidth = (this.roadWidth * 2) * (this.size / this.resolution);
+    
+    // Create road geometry
+    const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
+    roadGeometry.rotateX(-Math.PI / 2);
+    
+    // Create road material with asphalt texture
+    const roadMaterial = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      roughness: 0.8,
+      metalness: 0.1
+    });
+    
+    // Create road mesh
+    this.road = new THREE.Mesh(roadGeometry, roadMaterial);
+    
+    // Position road slightly above terrain to prevent z-fighting
+    this.road.position.set(0, this.roadHeight + 0.02, 0);
+    
+    // Add road markings
+    this.addRoadMarkings(this.road, roadWidth, roadLength);
+    
+    // Add to scene
+    this.scene.add(this.road);
+  }
+  
+  /**
+   * Add road markings to the road mesh
+   */
+  addRoadMarkings(roadMesh, roadWidth, roadLength) {
+    // Create center line
+    const centerLineGeometry = new THREE.PlaneGeometry(0.2, roadLength);
+    centerLineGeometry.rotateX(-Math.PI / 2);
+    
+    const linesMaterial = new THREE.MeshBasicMaterial({
+      color: 0xFFFFFF
+    });
+    
+    const centerLine = new THREE.Mesh(centerLineGeometry, linesMaterial);
+    centerLine.position.y = 0.01; // Slightly above road
+    roadMesh.add(centerLine);
+    
+    // Create dashed side lines
+    const dashLength = 2;
+    const dashGap = 2;
+    const numDashes = Math.floor(roadLength / (dashLength + dashGap));
+    
+    for (let i = 0; i < numDashes; i++) {
+      // Left side dash
+      const leftDashGeometry = new THREE.PlaneGeometry(0.2, dashLength);
+      leftDashGeometry.rotateX(-Math.PI / 2);
+      const leftDash = new THREE.Mesh(leftDashGeometry, linesMaterial);
+      leftDash.position.set(-roadWidth/2 + 1, 0.01, -roadLength/2 + i * (dashLength + dashGap) + dashLength/2);
+      roadMesh.add(leftDash);
+      
+      // Right side dash
+      const rightDashGeometry = new THREE.PlaneGeometry(0.2, dashLength);
+      rightDashGeometry.rotateX(-Math.PI / 2);
+      const rightDash = new THREE.Mesh(rightDashGeometry, linesMaterial);
+      rightDash.position.set(roadWidth/2 - 1, 0.01, -roadLength/2 + i * (dashLength + dashGap) + dashLength/2);
+      roadMesh.add(rightDash);
+    }
+  }
+  
+  /**
+   * Get the road height for vehicle spawning
+   * @returns {number} Road height in world coordinates
+   */
+  getRoadHeight() {
+    return this.roadHeight;
   }
 } 

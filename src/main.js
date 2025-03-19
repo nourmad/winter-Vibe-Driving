@@ -51,16 +51,16 @@ class DrivingSimulator {
     // Initialize physics
     this.physics.init();
     
+    console.log("Generating terrain...");
+    // Generate the terrain first
+    this.terrain.generate();
+    
     console.log("Loading vehicle...");
-    // Load vehicle and place it on the terrain
-    this.vehicle.init().then(() => {
+    // Load vehicle and place it on the terrain after terrain is generated
+    this.vehicle.init(this.terrain).then(() => {
       console.log("Vehicle loaded, setting up cameras...");
       // When vehicle is loaded, set up cameras
       this.cameraManager.init(this.vehicle.chassis);
-      
-      console.log("Generating terrain...");
-      // Generate the terrain
-      this.terrain.generate();
       
       console.log("Setting up snow effect...");
       // Set up snow effect
@@ -138,10 +138,13 @@ class DrivingSimulator {
     
     const delta = this.gameState.update();
     
+    // Update input manager first
+    this.inputManager.update(delta);
+    
     // Update physics
     this.physics.update(delta);
     
-    // Update vehicle and get driver inputs
+    // Update vehicle with current inputs
     this.vehicle.update(delta, this.inputManager.getInputs());
     
     // Update camera
