@@ -96,7 +96,7 @@ class DrivingSimulator {
   setupPlayButton() {
     // Get play button element
     const playButton = document.getElementById('play-button');
-    const playContainer = document.getElementById('play-container');
+    const playContainer = document.getElementById('menu-container');
     
     if (playButton && playContainer) {
       // Add click event listener
@@ -182,7 +182,7 @@ class DrivingSimulator {
       #hud, #controls-help, #controls {
         transition: opacity 1s ease;
       }
-      #play-container {
+      #menu-container {
         transition: opacity 1s ease;
       }
     `;

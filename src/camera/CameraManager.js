@@ -96,34 +96,32 @@ export class CameraManager {
   transitionToGameView(callback = null) {
     if (this.isTransitioning) return;
     
-    // Store current camera position and target as start values
+    // Set to third person mode immediately
+    this.currentMode = this.THIRD_PERSON;
+    
+    // Store current camera position as start position
     this.transitionStartPos.copy(this.camera.position);
+    
+    // Store current look target
     this.transitionStartLook.copy(this.lookAt);
     
-    // Calculate end position (behind the vehicle)
+    // Calculate end position (directly behind the vehicle)
     const vehiclePosition = this.vehicle.position.clone();
-    const vehicleRotation = this.vehicle.quaternion.clone();
+    const vehicleDirection = new THREE.Vector3(0, 0, 1).applyQuaternion(this.vehicle.quaternion);
     
-    // Create a temporary target to calculate world position
-    const tempTarget = new THREE.Object3D();
-    tempTarget.position.copy(vehiclePosition);
-    tempTarget.quaternion.copy(vehicleRotation);
-    tempTarget.updateMatrixWorld();
+    // Position behind the vehicle
+    this.transitionEndPos = vehiclePosition.clone();
+    this.transitionEndPos.add(vehicleDirection.multiplyScalar(-this.thirdPersonDistance));
+    this.transitionEndPos.y += this.thirdPersonHeight;
     
-    // Calculate behind vehicle position (third person view)
-    const behindOffset = new THREE.Vector3(0, this.thirdPersonHeight, this.thirdPersonDistance);
-    this.transitionEndPos = behindOffset.clone().applyMatrix4(tempTarget.matrixWorld);
-    
-    // Set end look target (slightly above the vehicle)
+    // Look at vehicle (slightly above)
     this.transitionEndLook = vehiclePosition.clone().add(new THREE.Vector3(0, 1, 0));
     
     // Setup transition
     this.isTransitioning = true;
     this.transitionProgress = 0;
+    this.transitionDuration = 1.0; // Even shorter transition
     this.transitionCallback = callback;
-    
-    // Set mode to third person for after the transition
-    this.currentMode = this.THIRD_PERSON;
   }
   
   /**
@@ -137,26 +135,24 @@ export class CameraManager {
       // Handle camera transition
       this.updateCameraTransition(deltaTime);
     } else {
-      // Get vehicle position and rotation
-      const vehiclePosition = this.vehicle.position.clone();
-      const vehicleRotation = this.vehicle.quaternion.clone();
+      // When not transitioning, simply update camera based on mode
       
-      // Update target position with vehicle
-      this.target.position.copy(vehiclePosition);
-      this.target.quaternion.copy(vehicleRotation);
+      // Update target position to match vehicle
+      this.target.position.copy(this.vehicle.position);
+      this.target.quaternion.copy(this.vehicle.quaternion);
       
-      // Add some camera shake based on vehicle speed or terrain
-      if (this.shakeEnabled) {
-        this.updateCameraShake(deltaTime);
-      }
-      
-      // Update camera based on mode
+      // Update camera position based on current mode
       this.updateCameraPosition(deltaTime);
       
-      // Apply final camera position with shake
-      this.camera.position.copy(this.cameraPosition).add(this.currentShake);
+      // Apply camera shake for immersion
+      if (this.shakeEnabled) {
+        this.updateCameraShake(deltaTime);
+        this.camera.position.copy(this.cameraPosition).add(this.currentShake);
+      } else {
+        this.camera.position.copy(this.cameraPosition);
+      }
       
-      // Set camera lookAt
+      // Point camera at look target
       this.camera.lookAt(this.lookAt);
     }
   }
@@ -174,11 +170,18 @@ export class CameraManager {
       this.transitionProgress = 1.0;
       this.isTransitioning = false;
       
+      // Ensure camera is in final position
+      this.camera.position.copy(this.transitionEndPos);
+      this.lookAt.copy(this.transitionEndLook);
+      this.camera.lookAt(this.lookAt);
+      
       // Execute callback if provided
       if (this.transitionCallback) {
         this.transitionCallback();
         this.transitionCallback = null;
       }
+      
+      return;
     }
     
     // Use smooth easing function
@@ -263,25 +266,27 @@ export class CameraManager {
       
     } else if (this.currentMode === this.THIRD_PERSON) {
       // Third person mode - following behind the vehicle
-      // Calculate target camera position
-      const offset = new THREE.Vector3(
-        0, 
-        this.thirdPersonHeight, 
-        this.thirdPersonDistance
+      
+      // Get the vehicle's direction vector (pointing forward along the vehicle's z-axis)
+      const vehicleDirection = new THREE.Vector3(0, 0, 1).applyQuaternion(this.vehicle.quaternion);
+      
+      // Calculate position behind the vehicle by using negative direction vector
+      const behindPosition = vehiclePosition.clone().add(
+        vehicleDirection.clone().multiplyScalar(-this.thirdPersonDistance)
       );
       
-      // Transform offset to world space based on vehicle rotation
-      this.target.updateMatrixWorld();
-      const worldOffset = offset.applyMatrix4(this.target.matrixWorld);
+      // Add height
+      behindPosition.y += this.thirdPersonHeight;
       
-      // Smoothly move camera to new position
-      if (deltaTime > 0) {
-        this.cameraPosition.lerp(worldOffset, 1 - Math.pow(this.thirdPersonLag, deltaTime));
+      // Set camera position with smooth follow (but only after transition completed)
+      if (deltaTime > 0 && this.transitionProgress === 0) {
+        this.cameraPosition.lerp(behindPosition, 1 - Math.pow(this.thirdPersonLag, deltaTime));
       } else {
-        this.cameraPosition.copy(worldOffset);
+        // Direct positioning during/right after transition
+        this.cameraPosition.copy(behindPosition);
       }
       
-      // Look at vehicle with slight offset
+      // Look at vehicle with slight offset for better view
       this.lookAt.copy(vehiclePosition).add(new THREE.Vector3(0, 1, 0));
       
     } else if (this.currentMode === this.ORBIT) {
