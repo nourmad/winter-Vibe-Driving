@@ -1,0 +1,17 @@
+{
+  "name": "winter-driving-simulator",
+  "version": "1.0.0",
+  "description": "3D Driving Simulator with Three.js and winter environment",
+  "main": "index.js",
+  "scripts": {
+    "start": "parcel index.html",
+    "build": "parcel build index.html"
+  },
+  "dependencies": {
+    "three": "^0.160.0",
+    "cannon-es": "^0.20.0"
+  },
+  "devDependencies": {
+    "parcel": "^2.9.3"
+  }
+} 
