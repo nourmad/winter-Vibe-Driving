@@ -40,3 +40,9 @@ temp/
 *.njsproj
 *.sln
 *.sw? 
+.parcel-cache/data.mdb
+/.parcel-cache
+*.mdb
+.parcel-cache/
+.parcel-cache\data.mdb
+.parcel-cache/data.mdb

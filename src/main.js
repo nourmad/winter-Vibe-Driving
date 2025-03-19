@@ -32,6 +32,9 @@ class DrivingSimulator {
     this.terrain = new TerrainGenerator(this.scene, this.physics);
     this.snowEffect = new SnowEffect(this.scene);
     
+    // Game state flag
+    this.gameStarted = false;
+    
     console.log("Game elements initialized");
     
     // Setup controls
@@ -73,6 +76,9 @@ class DrivingSimulator {
         loadingElement.style.display = 'none';
       }
       
+      // Setup Play Game button
+      this.setupPlayButton();
+      
       // Start animation loop
       this.animate();
     }).catch(error => {
@@ -85,6 +91,40 @@ class DrivingSimulator {
     
     // Handle window resize
     window.addEventListener('resize', () => this.onWindowResize());
+  }
+  
+  setupPlayButton() {
+    // Get play button element
+    const playButton = document.getElementById('play-button');
+    const playContainer = document.getElementById('play-container');
+    
+    if (playButton && playContainer) {
+      // Add click event listener
+      playButton.addEventListener('click', () => {
+        // Start camera transition
+        this.cameraManager.transitionToGameView(() => {
+          // Enable game controls after transition completes
+          this.gameStarted = true;
+          console.log("Game started!");
+          
+          // Show HUD and controls
+          const hud = document.getElementById('hud');
+          if (hud) hud.style.opacity = '1';
+          
+          const controlsHelp = document.getElementById('controls-help');
+          if (controlsHelp) controlsHelp.style.opacity = '1';
+          
+          const controls = document.getElementById('controls');
+          if (controls) controls.style.opacity = '1';
+        });
+        
+        // Hide play button and container
+        playContainer.style.opacity = '0';
+        setTimeout(() => {
+          playContainer.style.display = 'none';
+        }, 1000);
+      });
+    }
   }
   
   setupLighting() {
@@ -125,6 +165,28 @@ class DrivingSimulator {
       const intensity = e.target.value / 100;
       this.snowEffect.setIntensity(intensity);
     });
+    
+    // Initially hide HUD and controls until game starts
+    const hud = document.getElementById('hud');
+    if (hud) hud.style.opacity = '0';
+    
+    const controlsHelp = document.getElementById('controls-help');
+    if (controlsHelp) controlsHelp.style.opacity = '0';
+    
+    const controls = document.getElementById('controls');
+    if (controls) controls.style.opacity = '0';
+    
+    // Add transition style
+    const style = document.createElement('style');
+    style.innerHTML = `
+      #hud, #controls-help, #controls {
+        transition: opacity 1s ease;
+      }
+      #play-container {
+        transition: opacity 1s ease;
+      }
+    `;
+    document.head.appendChild(style);
   }
   
   onWindowResize() {
@@ -144,8 +206,21 @@ class DrivingSimulator {
     // Update physics
     this.physics.update(delta);
     
-    // Update vehicle with current inputs
-    this.vehicle.update(delta, this.inputManager.getInputs());
+    // Only update vehicle controls if game has started
+    if (this.gameStarted) {
+      // Update vehicle with current inputs
+      this.vehicle.update(delta, this.inputManager.getInputs());
+    } else {
+      // Use empty inputs when game hasn't started yet
+      this.vehicle.update(delta, {
+        steering: 0,
+        throttle: 0,
+        brake: 0,
+        handbrake: false,
+        reverse: false,
+        boost: false
+      });
+    }
     
     // Update camera
     this.cameraManager.update(delta);

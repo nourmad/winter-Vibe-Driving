@@ -22,10 +22,10 @@ export class Vehicle {
     this.vehicle = null;
     
     // Vehicle dimensions and properties
-    this.width = 1.8;
-    this.height = 1.4;
-    this.length = 4.5;
-    this.mass = 1500;
+    this.width = 1.7;     // Updated to match Ferrari F40 dimensions
+    this.height = 1.2;    // Ferrari F40 is low to the ground
+    this.length = 4.3;    // Updated to match Ferrari F40 length
+    this.mass = 1400;     // Ferrari F40 is lighter
     
     // Position properties
     this.spawnPosition = new CANNON.Vec3(0, 0, 0); // Default position
@@ -100,7 +100,8 @@ export class Vehicle {
     this.chassisBody.position.copy(this.spawnPosition);
     
     // Set initial rotation to face along the road (z-axis)
-    this.chassisBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), Math.PI);
+    // Important: Make sure physics body matches the visual orientation (0 instead of Math.PI)
+    this.chassisBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), 0);
     
     // Add chassis to the physics world
     this.physics.addBody(this.chassisBody, true);
@@ -182,141 +183,210 @@ export class Vehicle {
     return new Promise((resolve, reject) => {
       console.log("Starting vehicle model loading process...");
       
-      // We'll directly load the Ferrari F40 model which we know exists
-      const modelPath = './winterVibe/ferrari_f40.glb';
-      console.log(`Loading model from path: ${modelPath}`);
+      // Try multiple possible paths for the Ferrari model
+      const possiblePaths = [
+        './ferrari_f40.glb',
+        '/ferrari_f40.glb',
+        '../ferrari_f40.glb',
+        'assets/ferrari_f40.glb',
+        'public/ferrari_f40.glb',
+        'models/ferrari_f40.glb',
+        'src/ferrari_f40.glb'
+      ];
       
-      this.loader.load(
-        modelPath,
-        (gltf) => {
-          // Model loaded successfully
-          console.log(`Ferrari F40 model loaded successfully!`);
-          
-          // Set the chassis to the loaded model
-          this.chassis = gltf.scene;
-          
-          // Configure Ferrari F40 specific settings
-          console.log("Applying Ferrari F40 specific settings");
-          this.chassis.scale.set(0.7, 0.7, 0.7); // Scale for Ferrari F40
-          this.chassis.rotation.y = Math.PI; // Rotate to face forward
-          
-          // Enable shadows
-          this.chassis.castShadow = true;
-          this.chassis.receiveShadow = true;
-          
-          // Apply shadows to all child meshes
-          this.chassis.traverse((child) => {
-            if (child.isMesh) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-              console.log(`Applied shadows to mesh: ${child.name}`);
-            }
-          });
-          
-          // Add the model to the scene
-          this.scene.add(this.chassis);
-          console.log("Added Ferrari model to scene");
-          
-          // Link chassis to physics body
-          this.chassis.userData.physicsBody = this.chassisBody;
-          
-          // Find wheels in the model
-          console.log("Searching for wheels in the Ferrari model...");
-          const wheelRadius = 0.33;
-          const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
-          
-          // Try to find wheels in the model using extended pattern matching
-          let wheelMeshes = [];
-          this.chassis.traverse((child) => {
-            const lowerName = child.name.toLowerCase();
-            // Look for common wheel naming patterns
-            if (lowerName.includes('wheel') || 
-                lowerName.includes('tire') || 
-                lowerName.includes('tyre') ||
-                lowerName.includes('rim') ||
-                lowerName.match(/wheel[_-]?[fr]?[lr]/) || // wheel_fl, wheel_fr, wheel_rl, wheel_rr
-                lowerName.match(/w[fr][lr]/)) {          // wfl, wfr, wrl, wrr
-              console.log(`Found wheel in Ferrari model: ${child.name}`);
-              wheelMeshes.push(child);
-            }
-          });
-          
-          // If no wheels found in the model, create them
-          if (wheelMeshes.length < 4) {
-            console.log(`Only found ${wheelMeshes.length} wheels in model, creating procedural wheels`);
-            const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.2, 24);
-            wheelGeometry.rotateZ(Math.PI / 2);
-            
-            // Create wheel meshes
-            for (let i = 0; i < 4; i++) {
-              const wheelMesh = new THREE.Mesh(wheelGeometry, wheelMaterial);
-              wheelMesh.castShadow = true;
-              this.scene.add(wheelMesh);
-              this.wheels.push(wheelMesh);
-            }
-          } else {
-            // Use the wheels from the model
-            console.log(`Using ${wheelMeshes.length} wheels from the Ferrari model`);
-            this.wheels = wheelMeshes;
+      // Function to check if a file exists using fetch
+      const checkFileExists = async (url) => {
+        try {
+          const response = await fetch(url, { method: 'HEAD' });
+          return response.ok;
+        } catch (e) {
+          console.error(`Error checking file at ${url}:`, e);
+          return false;
+        }
+      };
+      
+      // Function to find the first valid path
+      const findValidPath = async () => {
+        console.log("Checking Ferrari model in these locations:", possiblePaths);
+        
+        // Try each path
+        for (const path of possiblePaths) {
+          console.log(`Checking if model exists at: ${path}`);
+          const exists = await checkFileExists(path);
+          if (exists) {
+            console.log(`Found Ferrari model at: ${path}`);
+            return path;
           }
-          
-          // Debug the wheels array
-          console.log(`Final wheel count: ${this.wheels.length}`);
-          
-          // Create steering wheel
-          console.log("Setting up steering wheel...");
-          let steeringWheelFound = false;
-          this.chassis.traverse((child) => {
-            const lowerName = child.name.toLowerCase();
-            if (lowerName.includes('steering') || lowerName.includes('steer') || lowerName.includes('wheel_steer')) {
-              console.log(`Found steering wheel in model: ${child.name}`);
-              this.steeringWheel = child;
-              steeringWheelFound = true;
-            }
-          });
-          
-          if (!steeringWheelFound) {
-            console.log("No steering wheel found in model, creating a procedural one");
-            // Create steering wheel
-            const steeringWheelGeometry = new THREE.TorusGeometry(0.3, 0.03, 16, 32);
-            const steeringWheelMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
-            this.steeringWheel = new THREE.Mesh(steeringWheelGeometry, steeringWheelMaterial);
-            
-            // Add spokes to the steering wheel
-            const spokeGeometry = new THREE.BoxGeometry(0.6, 0.02, 0.02);
-            const spokeMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
-            
-            // Horizontal spoke
-            const horizontalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
-            this.steeringWheel.add(horizontalSpoke);
-            
-            // Vertical spoke
-            const verticalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
-            verticalSpoke.rotation.z = Math.PI / 2;
-            this.steeringWheel.add(verticalSpoke);
-            
-            // Position steering wheel in the vehicle
-            this.steeringWheel.position.set(0, 0.9, 0.7);
-            this.steeringWheel.rotation.x = Math.PI / 2;
-            this.chassis.add(this.steeringWheel);
-          }
-          
-          console.log("Ferrari F40 model setup complete!");
-          resolve();
-        },
-        // Progress callback
-        (xhr) => {
-          const percent = Math.round(xhr.loaded / xhr.total * 100);
-          console.log(`Loading Ferrari F40 model: ${percent}%`);
-        },
-        // Error callback
-        (error) => {
-          console.error(`Error loading Ferrari F40 model:`, error);
-          console.log("Falling back to simple car model");
+        }
+        
+        // If no path works, return null
+        console.error("Ferrari model not found in any of the expected locations");
+        return null;
+      };
+      
+      // Find and load from a valid path
+      findValidPath().then(validPath => {
+        if (!validPath) {
+          console.error("No valid model path found, falling back to simple car");
           this.createSimpleCarModel();
           resolve();
+          return;
         }
-      );
+        
+        console.log(`Loading Ferrari model from validated path: ${validPath}`);
+        
+        this.loader.load(
+          validPath,
+          (gltf) => {
+            // Model loaded successfully
+            console.log(`Ferrari F40 model loaded successfully!`);
+            
+            // Set the chassis to the loaded model
+            this.chassis = gltf.scene;
+            
+            // Configure Ferrari F40 specific settings
+            console.log("Applying Ferrari F40 specific settings");
+            this.chassis.scale.set(0.7, 0.7, 0.7); // Scale for Ferrari F40
+            // Fix car orientation - rotate 180 degrees to face forward
+            this.chassis.rotation.y = Math.PI; // Changed back to Math.PI to rotate 180 degrees
+            
+            // Adjust position to ensure car is on the ground
+            this.chassis.position.y = 0.2; // Lower the car to the ground
+            
+            // Enable shadows
+            this.chassis.castShadow = true;
+            this.chassis.receiveShadow = true;
+            
+            // Apply shadows to all child meshes
+            this.chassis.traverse((child) => {
+              if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                console.log(`Applied shadows to mesh: ${child.name}`);
+              }
+            });
+            
+            // Add the model to the scene
+            this.scene.add(this.chassis);
+            console.log("Added Ferrari model to scene");
+            
+            // Link chassis to physics body
+            this.chassis.userData.physicsBody = this.chassisBody;
+            
+            // Find wheels in the model
+            console.log("Searching for wheels in the Ferrari model...");
+            const wheelRadius = 0.33;
+            const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            
+            // IMPORTANT: Don't create procedural wheels if we find wheels in the model
+            let wheelMeshes = [];
+            this.chassis.traverse((child) => {
+              const lowerName = child.name.toLowerCase();
+              // Look for common wheel naming patterns
+              if (lowerName.includes('wheel') || 
+                  lowerName.includes('tire') || 
+                  lowerName.includes('tyre') ||
+                  lowerName.includes('rim') ||
+                  lowerName.match(/wheel[_-]?[fr]?[lr]/) || // wheel_fl, wheel_fr, wheel_rl, wheel_rr
+                  lowerName.match(/w[fr][lr]/)) {          // wfl, wfr, wrl, wrr
+                console.log(`Found wheel in Ferrari model: ${child.name}`);
+                wheelMeshes.push(child);
+              }
+            });
+            
+            // If exactly 4 wheels found, use them, otherwise create new ones
+            if (wheelMeshes.length === 4) {
+              console.log(`Using ${wheelMeshes.length} wheels from the Ferrari model`);
+              // Sort wheels to ensure they're in the correct order: FL, FR, BL, BR
+              // This step is important to match the physics wheel order
+              this.wheels = this.sortWheels(wheelMeshes);
+              
+              // IMPORTANT: Remove wheels from scene to avoid duplicate wheels
+              // The physics system will position them correctly
+              this.wheels.forEach(wheel => {
+                // Make wheel invisible in original position to avoid duplicates
+                wheel.visible = false;
+                // Create clones that will be positioned by physics
+                const wheelClone = wheel.clone();
+                wheelClone.visible = true;
+                wheelClone.castShadow = true;
+                this.scene.add(wheelClone);
+                // Replace original wheel with clone in the wheels array
+                const index = this.wheels.indexOf(wheel);
+                this.wheels[index] = wheelClone;
+              });
+            } else {
+              // Create procedural wheels
+              console.log(`Found ${wheelMeshes.length} wheels in model, creating 4 procedural wheels instead`);
+              this.wheels = [];
+              const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.2, 24);
+              wheelGeometry.rotateZ(Math.PI / 2);
+              
+              for (let i = 0; i < 4; i++) {
+                const wheelMesh = new THREE.Mesh(wheelGeometry, wheelMaterial);
+                wheelMesh.castShadow = true;
+                this.scene.add(wheelMesh);
+                this.wheels.push(wheelMesh);
+              }
+            }
+            
+            // Debug the wheels array
+            console.log(`Final wheel count: ${this.wheels.length}`);
+            
+            // Create steering wheel in the correct position (front of car)
+            console.log("Setting up steering wheel...");
+            let steeringWheelFound = false;
+            this.chassis.traverse((child) => {
+              const lowerName = child.name.toLowerCase();
+              if (lowerName.includes('steering') || lowerName.includes('steer') || lowerName.includes('wheel_steer')) {
+                console.log(`Found steering wheel in model: ${child.name}`);
+                this.steeringWheel = child;
+                steeringWheelFound = true;
+              }
+            });
+            
+            if (!steeringWheelFound) {
+              console.log("No steering wheel found in model, creating a procedural one");
+              // Create steering wheel
+              const steeringWheelGeometry = new THREE.TorusGeometry(0.3, 0.03, 16, 32);
+              const steeringWheelMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
+              this.steeringWheel = new THREE.Mesh(steeringWheelGeometry, steeringWheelMaterial);
+              
+              // Add spokes to the steering wheel
+              const spokeGeometry = new THREE.BoxGeometry(0.6, 0.02, 0.02);
+              const spokeMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
+              
+              // Horizontal spoke
+              const horizontalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
+              this.steeringWheel.add(horizontalSpoke);
+              
+              // Vertical spoke
+              const verticalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
+              verticalSpoke.rotation.z = Math.PI / 2;
+              this.steeringWheel.add(verticalSpoke);
+              
+              // Position steering wheel in the vehicle's front interior (driver's position)
+              this.steeringWheel.position.set(-0.4, 0.7, 0.5); // Repositioned to be inside the car on the left side
+              this.steeringWheel.rotation.x = Math.PI / 2;
+              this.chassis.add(this.steeringWheel);
+            }
+            
+            console.log("Ferrari F40 model setup complete!");
+            resolve();
+          },
+          // Progress callback
+          (xhr) => {
+            const percent = Math.round(xhr.loaded / xhr.total * 100);
+            console.log(`Loading Ferrari F40 model: ${percent}%`);
+          },
+          // Error callback
+          (error) => {
+            console.error(`Error loading Ferrari F40 model:`, error);
+            this.createSimpleCarModel();
+            resolve();
+          }
+        );
+      });
     });
   }
   
@@ -622,7 +692,16 @@ export class Vehicle {
   updateChassisFromPhysics() {
     // Update chassis position from physics
     this.chassis.position.copy(this.chassisBody.position);
-    this.chassis.quaternion.copy(this.chassisBody.quaternion);
+    
+    // Copy quaternion but apply a 180-degree correction around Y-axis to match physics
+    // This fixes the inconsistency between visual model and physics orientation
+    const correctedQuaternion = this.chassisBody.quaternion.clone();
+    // Apply correction rotation of 180 degrees around Y axis
+    const correctionQuat = new CANNON.Quaternion();
+    correctionQuat.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), Math.PI);
+    correctedQuaternion.mult(correctionQuat, correctedQuaternion);
+    
+    this.chassis.quaternion.copy(correctedQuaternion);
   }
   
   /**
@@ -643,5 +722,83 @@ export class Vehicle {
       new CANNON.Vec3(force.x, force.y, force.z),
       new CANNON.Vec3(point.x, point.y, point.z)
     );
+  }
+  
+  /**
+   * Helper method to sort wheels in the correct order: FL, FR, BL, BR
+   * This is important for matching wheels to the physics system
+   * @param {Array} wheels - Array of wheel meshes to sort
+   * @returns {Array} Sorted wheel meshes
+   */
+  sortWheels(wheels) {
+    // Create a copy to avoid modifying the original array
+    const wheelsCopy = [...wheels];
+    
+    // Define helper function to check if a name contains front/rear and left/right indicators
+    const getWheelPosition = (name) => {
+      name = name.toLowerCase();
+      const isFront = name.includes('front') || name.includes('f') || name.includes('fr');
+      const isRear = name.includes('rear') || name.includes('back') || name.includes('r') || name.includes('rr');
+      const isLeft = name.includes('left') || name.includes('l');
+      const isRight = name.includes('right') || name.includes('r');
+      
+      // If position can be determined by name
+      if (isFront && isLeft) return 'FL';
+      if (isFront && isRight) return 'FR';
+      if (isRear && isLeft) return 'BL';
+      if (isRear && isRight) return 'BR';
+      
+      // If position can't be determined by name, use position
+      return '';
+    };
+    
+    // Try to sort by name first
+    const sortedWheels = [];
+    const positions = ['FL', 'FR', 'BL', 'BR'];
+    
+    // Try to place wheels in their correct positions based on naming
+    for (const position of positions) {
+      const wheel = wheelsCopy.find(w => getWheelPosition(w.name) === position);
+      if (wheel) {
+        sortedWheels.push(wheel);
+        wheelsCopy.splice(wheelsCopy.indexOf(wheel), 1);
+      }
+    }
+    
+    // If we couldn't sort all wheels by name, sort the remaining by position
+    if (wheelsCopy.length > 0) {
+      // Sort by X position (left to right)
+      wheelsCopy.sort((a, b) => a.position.x - b.position.x);
+      
+      // If we have 4 wheels total, try to sort by position
+      if (wheels.length === 4) {
+        // Find which ones are front vs rear by Z position
+        wheelsCopy.sort((a, b) => a.position.z - b.position.z);
+        const frontWheels = wheelsCopy.slice(0, 2);
+        const rearWheels = wheelsCopy.slice(2, 4);
+        
+        // Sort front wheels by X (left to right)
+        frontWheels.sort((a, b) => a.position.x - b.position.x);
+        // Sort rear wheels by X (left to right)
+        rearWheels.sort((a, b) => a.position.x - b.position.x);
+        
+        // Add any remaining wheels in the correct order
+        if (sortedWheels.length === 0) {
+          sortedWheels.push(frontWheels[0]); // FL
+          sortedWheels.push(frontWheels[1]); // FR
+          sortedWheels.push(rearWheels[0]);  // BL
+          sortedWheels.push(rearWheels[1]);  // BR
+        } else {
+          // Add remaining wheels
+          sortedWheels.push(...wheelsCopy);
+        }
+      } else {
+        // If we don't have exactly 4 wheels, just add the remaining ones
+        sortedWheels.push(...wheelsCopy);
+      }
+    }
+    
+    console.log("Sorted wheels:", sortedWheels.map(w => w.name));
+    return sortedWheels;
   }
 } 
