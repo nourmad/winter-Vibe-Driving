@@ -1,0 +1,1712 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { MessageSquare, Send, Image, Trash2, X, Menu, Globe, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ChatMessage } from '../components/ChatMessage';
+import { ModelSelector, getModelDisplayName, getAgentSystemPrompt, isAgentModel } from '../components/ModelSelector';
+import { ToggleSwitch } from '../components/ToggleSwitch';
+import { Sidebar } from '../components/Sidebar';
+import { ReferModal } from '../components/ReferModal';
+import { type Model } from '../types';
+import { useTheme } from '../context/ThemeContext';
+import {useUser} from "@clerk/shared/react";
+import {useAuth} from "@clerk/clerk-react";
+import {type UserData} from "../types";
+import { useUpgradeLimit } from '../context/UpgradeLimitContext';
+import { 
+  cacheChatHistory, 
+  getCachedChat, 
+  getCachedChats, 
+  removeCachedChat, 
+  syncServerChatsWithCache,
+  CACHE_VERSION 
+} from '../utils/cache';
+
+// Rename Message interface to avoid conflict
+interface MessageType {
+  id: number;
+  content: string;
+  type: 'user' | 'bot';
+  timestamp: Date;
+  imageUrl?: string;
+  return_type?: string;
+  isLoading?: boolean;
+  isNewMessage?: boolean;
+  pdfText?: string;
+  fileContent?: string;
+  fileName?: string;
+}
+
+interface ChatHistory {
+  id: string;
+  title: string;
+  messages: MessageType[];
+  model: Model;
+  webSearchEnabled: boolean;
+}
+
+interface Notification {
+  message: string;
+  type: 'success' | 'error';
+  id: number;
+}
+
+interface CachedChat {
+  id: string;
+  title: string;
+  messages: MessageType[];
+  timestamp: number;
+  version: string;
+  model: Model;
+  webSearchEnabled?: boolean;
+}
+
+// Add this new component before the Chat component
+const LoadingDots = () => {
+  return (
+    <div className="flex items-center space-x-1">
+      <span className="text-sm">Generating</span>
+      <div className="flex space-x-1">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="w-1.5 h-1.5 bg-current rounded-full"
+            style={{ 
+              animation: 'bounce-dot 1s infinite',
+              animationDelay: `${i * 0.2}s`,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default function Chat() {
+  const navigate = useNavigate();
+  const { theme } = useTheme();
+  const { user, isSignedIn } = useUser();
+  const { getToken } = useAuth();
+  const { openUpgradeModal } = useUpgradeLimit();
+  const isDark = theme === 'dark';
+  const [messages, setMessages] = useState<MessageType[]>([]);
+  const [input, setInput] = useState('');
+  const [isCreativeMode, setIsCreativeMode] = useState(false);
+  const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(true);
+  const [selectedModel, setSelectedModel] = useState<Model>(() => {
+    // Use the default model from localStorage, fallback to gpt-4o-mini
+    const defaultModel = localStorage.getItem('default_model');
+    return (defaultModel as Model) || 'gpt-4o-mini';
+  });
+  const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
+  const [currentChat, setCurrentChat] = useState('New Chat');
+  const [isReferModalOpen, setIsReferModalOpen] = useState(false);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<string | null>(null);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfText, setPdfText] = useState<string | null>(null);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const [userData, setUserData] = useState<UserData | null>(null);
+  const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [trialPromptCount, setTrialPromptCount] = useState<number | null>(null);
+  const [isReferralPopupOpen, setIsReferralPopupOpen] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const [animationsEnabled, setAnimationsEnabled] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [isSidebarVisible, setIsSidebarVisible] = useState(true);
+
+  // Initialize the chat component
+  useEffect(() => {
+    const initializeChat = async () => {
+      try {
+        setIsLoading(true);
+
+        // Step 1: Get user data first
+        const userDataResult = await fetchUserData();
+        if (!userDataResult?.id) {
+          console.warn('No user data available');
+          setIsLoading(false);
+          return;
+        }
+
+        // Step 2: Get authentication token
+        const token = await getToken({ template: 'user_jwt' });
+        if (!token) {
+          console.error('Failed to retrieve session token');
+          setIsLoading(false);
+          return;
+        }
+
+        // Step 3: Fetch server chats
+        const response = await fetch(
+          `${import.meta.env.VITE_BACKEND_URL}/api/get-all-chats`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ user_id: userDataResult.id }),
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch chats from server');
+        }
+
+        const serverChats = await response.json();
+        console.log('Server chats:', serverChats);
+
+        // Step 4: Transform server chats to the correct format
+        const transformedServerChats = serverChats.map((chat: any) => ({
+          id: chat.chat_id,
+          title: chat.name,
+          messages: [], // Initialize messages as empty array
+          model: chat.model,
+          webSearchEnabled: chat.web_search_enabled !== undefined ? chat.web_search_enabled : true,
+        }));
+
+        // Step 5: Merge with cached data and update state
+        const mergedChats = syncServerChatsWithCache(transformedServerChats);
+        setChatHistory(mergedChats);
+
+        // Step 6: If no chats exist, create a new one
+        if (mergedChats.length === 0 || currentChat === 'New Chat') {
+          console.log('Creating new chat for user...');
+          await startNewChat();
+        }
+
+        setIsInitialized(true);
+      } catch (error) {
+        console.error('Error initializing chat:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    // Only initialize if user is signed in
+    if (isSignedIn && user) {
+      initializeChat();
+    }
+  }, [isSignedIn, user, getToken]);
+
+  const isSavingUser = useRef(false);
+
+  const saveUserData = async (): Promise<UserData | null> => {
+    if (isSavingUser.current) return null; // Prevent duplicate calls
+    isSavingUser.current = true;
+
+    try {
+      const token = await getToken({ template: 'user_jwt' });
+      if (!token) {
+        throw new Error('Failed to retrieve session token.');
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/save-user`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save user data to backend');
+      }
+
+      console.log('User data saved successfully');
+      const savedUser = await response.json();
+      setUserData(savedUser); // Update user data in state
+      return savedUser; // Return saved user data
+    } catch (error) {
+      console.error('Error saving user data:', error);
+      return null;
+    } finally {
+      isSavingUser.current = false; // Allow future calls
+    }
+  };
+
+  const isFetchingUser = useRef(false);
+
+  const fetchUserData = async (): Promise<UserData | null> => {
+    if (isFetchingUser.current) return null; // Prevent duplicate calls
+    isFetchingUser.current = true;
+
+    try {
+      if (isSignedIn && user) {
+        const token = await getToken({ template: 'user_jwt' });
+        if (!token) {
+          throw new Error('Failed to retrieve session token.');
+        }
+
+        const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/get-user`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ username: user.username }),
+        });
+
+        if (!response.ok) {
+          if (response.status === 500) {
+            console.log('User not found, saving user...');
+            const savedUser = await saveUserData();
+            return savedUser; // Return saved user
+          } else {
+            throw new Error('Failed to fetch user data from backend');
+          }
+        } else {
+          const backendUserData = await response.json();
+          const userDataCombined = {
+            ...user,
+            ...backendUserData,
+          }
+          setUserData(userDataCombined);
+          setTrialPromptCount(backendUserData?.trial_prompt_count);
+          return userDataCombined
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+    } finally {
+      isFetchingUser.current = false; // Allow future calls
+    }
+    return null;
+  };
+
+  // Load cached chats immediately on mount
+  useEffect(() => {
+    const loadCachedChats = () => {
+      try {
+        const cachedChats = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+        if (Array.isArray(cachedChats) && cachedChats.length > 0) {
+          // Convert cached chats to match ChatHistory interface
+          const convertedChats = cachedChats.map((chat: CachedChat) => ({
+            id: chat.id,
+            title: chat.title,
+            messages: chat.messages || [],
+            model: chat.model,
+            webSearchEnabled: chat.webSearchEnabled !== undefined ? chat.webSearchEnabled : true
+          }));
+          setChatHistory(convertedChats);
+          // Set current chat to the first one if not already set
+          if (currentChat === 'New Chat' && convertedChats.length > 0) {
+            setCurrentChat(convertedChats[0].id);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading cached chats:', error);
+      }
+    };
+
+    // Load cached chats immediately
+    loadCachedChats();
+  }, []); // Empty dependency array for initial load only
+
+  // Then fetch from server and update if needed
+  useEffect(() => {
+    const fetchAllChats = async () => {
+      try {
+        if (!userData?.id) {
+          console.warn('User ID is not available. Skipping fetchAllChats.');
+          return;
+        }
+
+        const token = await getToken({ template: 'user_jwt' });
+        if (!token) {
+          throw new Error('Failed to retrieve session token.');
+        }
+
+        const payload = {
+          user_id: userData.id,
+        };
+
+        const response = await fetch(
+          `${import.meta.env.VITE_BACKEND_URL}/api/get-all-chats`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch all chats.');
+        }
+
+        const chats = await response.json();
+
+        // Transform backend response into ChatHistory format
+        const serverChats = chats.map((chat: any) => ({
+          id: chat.chat_id,
+          title: chat.name,
+          messages: [], // Initialize messages as empty array
+          model: chat.model,
+          webSearchEnabled: chat.web_search_enabled !== undefined ? chat.web_search_enabled : true,
+        }));
+
+        // Use the new sync function to merge server and cached data
+        const mergedChats = syncServerChatsWithCache(serverChats);
+        setChatHistory(mergedChats);
+
+      } catch (error) {
+        console.error('Error fetching all chats:', error);
+      }
+    };
+
+    // Fetch all chats only if userData?.id is available
+    if (userData?.id) {
+      fetchAllChats();
+    }
+  }, [getToken, userData, userData?.id]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+          isMobileSidebarOpen &&
+          sidebarRef.current &&
+          !sidebarRef.current.contains(event.target as Node)
+      ) {
+        setIsMobileSidebarOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isMobileSidebarOpen]);
+
+  const isNearBottom = () => {
+    const container = messagesContainerRef.current;
+    if (!container) return false;
+    
+    const threshold = 100; // pixels from bottom to consider "at bottom"
+    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+  };
+
+  const scrollToBottom = (force = false) => {
+    if (force || autoScrollEnabled) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+    }
+  };
+
+  const handleScroll = () => {
+    const wasAtBottom = isNearBottom();
+    setIsAtBottom(wasAtBottom);
+    setAutoScrollEnabled(wasAtBottom); // Enable auto-scroll only when user scrolls to bottom
+  };
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.addEventListener('scroll', handleScroll);
+      return () => container.removeEventListener('scroll', handleScroll);
+    }
+  }, []);
+
+  // Watch for changes in the last message's content
+  useEffect(() => {
+    if (messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage.type === 'bot') {
+        scrollToBottom();
+      }
+    }
+  }, [messages, messages[messages.length - 1]?.content]);
+
+  // Initial scroll and new message scroll
+  useEffect(() => {
+    scrollToBottom(true);
+  }, [messages.length]);
+
+  const suggestions = [
+    { title: 'Design a database schema', subtitle: 'for an online merch store' },
+    { title: 'Explain Pi', subtitle: 'to someone 5 years old' },
+  ];
+
+  const startNewChat = async () => {
+    if (!isSignedIn || !user) {
+      console.error("User is not signed in.");
+      return;
+    }
+
+    if (!userData?.id) {
+      console.log('Waiting for user data...');
+      await fetchUserData();
+    }
+
+    try {
+      const token = await getToken({ template: 'user_jwt' });
+      if (!token) {
+        throw new Error("Failed to retrieve session token.");
+      }
+
+      // Ensure the payload is JSON-serializable
+      const payload = {
+        name: 'New Chat', // Default name if none provided
+        model: selectedModel, // Selected model for the chat
+        user_id: userData?.id, // User ID from Clerk
+        web_search_enabled: isWebSearchEnabled, // Include web search status
+      };
+
+      console.log(`Creating new chat with model: ${selectedModel}`);
+
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/create-chat`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload), // Serialize the payload properly
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to create chat.");
+      }
+
+      const chatData = await response.json();
+      console.log("Chat created successfully:", chatData);
+
+      // Add the new chat to the chat history
+      const newChat: ChatHistory = {
+        id: chatData.chat_id,
+        title: chatData.name,
+        messages: [], // Initialize with an empty message array
+        model: chatData.model,
+        webSearchEnabled: chatData.web_search_enabled !== undefined ? chatData.web_search_enabled : true,
+      };
+
+      // Update the chat history and immediately set the current chat
+      setChatHistory((prev) => [newChat, ...prev]);
+      setCurrentChat(chatData.chat_id); // Switch to the new chat
+      setMessages([]); // Clear messages for the new chat
+    } catch (error) {
+      console.error("Error creating chat:", error);
+    }
+  };
+
+  function mapToFrontendMessage(backendMessage: any): MessageType {
+    const isUserMessage = !backendMessage.is_bot_message;
+    const hasImage = backendMessage.image_url && backendMessage.image_url.trim() !== '';
+    
+    return {
+      id: backendMessage.message_id, // Use backend's `message_id`
+      content: backendMessage.message, // Use backend's `message`
+      type: backendMessage.is_bot_message ? 'bot' : 'user', // Map `is_bot_message` to `type`
+      timestamp: new Date(backendMessage.timestamp), // Convert timestamp to `Date` object
+      imageUrl: backendMessage.image_url || undefined, // Map `image_url` (use `undefined` if null)
+      return_type: backendMessage.type || (isUserMessage && hasImage ? 'image' : undefined),
+    };
+  }
+
+  // Add function to extract text from PDF
+  const extractTextFromPDF = async (file: File): Promise<string> => {
+    console.log('Extracting text from PDF using PDF.js:', file.name);
+    
+    try {
+      // Import PDF.js dynamically when needed to avoid increasing initial load time
+      const pdfjsLib = await import('pdfjs-dist');
+      
+      // Set the worker source (required for PDF.js)
+      if (typeof window !== 'undefined') {
+        // We copy the worker file to public directory during build
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+      }
+      
+      // Convert file to ArrayBuffer
+      const arrayBuffer = await file.arrayBuffer();
+      
+      // Load the PDF document
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      console.log('PDF document loading...');
+      const pdf = await loadingTask.promise;
+      console.log('PDF loaded successfully. Number of pages:', pdf.numPages);
+      
+      // Extract text from all pages
+      let fullText = '';
+      
+      for (let i = 1; i <= pdf.numPages; i++) {
+        console.log(`Processing page ${i}/${pdf.numPages}`);
+        
+        // Get the page
+        const page = await pdf.getPage(i);
+        
+        // Extract text content
+        const textContent = await page.getTextContent();
+        
+        // Extract and join all text items
+        const pageText = textContent.items.map((item: any) => item.str).join(' ');
+        
+        // Add page text to full text
+        if (pageText.trim()) {
+          fullText += pageText + '\n\n';
+        }
+      }
+      
+      // Cleanup and return the extracted text
+      const cleanedText = fullText.trim();
+      console.log('Successfully extracted text from PDF, length:', cleanedText.length);
+      
+      if (cleanedText.length > 0) {
+        return cleanedText;
+      } else {
+        console.warn('PDF.js extracted empty text content');
+        return '[No text content was found in this PDF. The PDF might be scanned or contain only images. Please summarize the content in your message.]';
+      }
+      
+    } catch (error) {
+      console.error('Error using PDF.js for extraction:', error);
+      
+      // Fallback message with more helpful information
+      return '[PDF content could not be extracted. The PDF might be protected, corrupted, or in an unsupported format. Please summarize the content in your message.]';
+    }
+  };
+
+  // Add this function before handleFileUpload
+  const readTextFile = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        resolve(e.target?.result as string);
+      };
+      reader.onerror = (e) => {
+        reject(new Error('Error reading file'));
+      };
+      reader.readAsText(file);
+    });
+  };
+
+  // List of supported text-based file extensions
+  const TEXT_FILE_EXTENSIONS = [
+    // Programming Languages
+    '.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.cpp', '.c', '.cs', '.rb', '.php', '.go', '.rs', '.swift',
+    // Web
+    '.html', '.css', '.scss', '.sass', '.less', '.json', '.xml', '.yaml', '.yml',
+    // Config & Data
+    '.env', '.ini', '.conf', '.md', '.txt', '.csv',
+    // Shell
+    '.sh', '.bash', '.zsh', '.fish',
+    // Other
+    '.sql', '.graphql', '.r', '.m', '.kt', '.kts', '.scala', '.lua', '.pl', '.pm'
+  ];
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('File upload event triggered');
+    const file = e.target.files?.[0];
+    if (!file) {
+      console.log('No file selected');
+      return;
+    }
+
+    console.log('File type:', file.type, 'File name:', file.name);
+
+    // Check file size (10MB limit)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
+    if (file.size > MAX_FILE_SIZE) {
+      alert('File size exceeds 10MB limit. Please upload a smaller file.');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''; // Clear the file input
+      }
+      return;
+    }
+
+    // Check for GIF files and reject them
+    if (file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif')) {
+      alert('GIF files are not supported. Please upload a PNG or JPEG image.');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''; // Clear the file input
+      }
+      return;
+    }
+
+    // Reset previous uploads
+    setImagePreview(null);
+    setPdfPreview(null);
+    setPdfFile(null);
+    setPdfText(null);
+
+    // Get file extension
+    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
+
+    if (file.type.startsWith('image/')) {
+      console.log('Processing image file');
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string);
+        console.log('Image preview set');
+      };
+      reader.readAsDataURL(file);
+    } else if (file.type === 'application/pdf') {
+      console.log('Processing PDF file');
+      setPdfFile(file);
+      console.log('PDF file state set');
+      
+      try {
+        const extractedText = await extractTextFromPDF(file);
+        console.log('Text extracted successfully, length:', extractedText.length);
+        setPdfText(extractedText);
+        console.log('PDF text state updated');
+      } catch (error) {
+        console.error('Error extracting PDF text:', error);
+      }
+    } else if (TEXT_FILE_EXTENSIONS.includes(fileExtension)) {
+      console.log('Processing text file:', fileExtension);
+      try {
+        const content = await readTextFile(file);
+        setPdfText(`File: ${file.name}\n\n${content}`);
+        console.log('Text file content loaded');
+      } catch (error) {
+        console.error('Error reading text file:', error);
+        setPdfText(`Error reading file ${file.name}. Please ensure it's a valid text file.`);
+      }
+    } else {
+      console.log('Unsupported file type:', file.type);
+      alert('Unsupported file type. Please upload an image, PDF, or text-based file.');
+    }
+  };
+
+  const clearFilePreview = () => {
+    setImagePreview(null);
+    setPdfPreview(null);
+    setPdfFile(null);
+    setPdfText(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""; // Reset the file input value
+    }
+  };
+
+  const handleSend = async (e: React.FormEvent, model = selectedModel) => {
+    e.preventDefault();
+    const trimmedInput = input.trim();
+    
+    // Allow sending if there's either text input or PDF text
+    if (!trimmedInput && !imagePreview && !pdfText) return;
+
+    try {
+      setIsModelSelectorOpen(false); // Close model selector when sending message
+      setIsGenerating(true);
+      let imageUrl = undefined;
+      
+      if (imagePreview) {
+        const imageFile = (document.querySelector('input[type="file"]') as HTMLInputElement)?.files?.[0];
+        if(imageFile){
+          // Create FormData and append the file
+          const formData = new FormData();
+          formData.append('file', imageFile);
+
+          // Get the token
+          const token = await getToken({ template: 'user_jwt' });
+          if (!token) {
+            throw new Error('Failed to retrieve session token.');
+          }
+
+          // Upload the image
+          const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/upload-image`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Error response from upload:', errorText);
+            throw new Error(`Failed to upload image: ${response.statusText}`);
+          }
+
+          const responseData = await response.json();
+          if (!responseData.imageUrl) {
+            throw new Error('Image URL not returned by the server.');
+          }
+
+          imageUrl = responseData.imageUrl;
+        }
+      }
+
+      const now = Date.now();
+      const currentImageUrl = imageUrl;
+      
+      // Combine user input with PDF text if available
+      let messageContent = trimmedInput;
+      if (pdfText) {
+        // If user has typed a message, add their message first, then the PDF content
+        messageContent = trimmedInput 
+          ? `${trimmedInput}\n\n${pdfText}` 
+          : pdfText;
+      }
+
+      // Create user message
+      const userMessageFrontend: MessageType = {
+        id: now,
+        content: messageContent,
+        type: 'user',
+        timestamp: new Date(now),
+        imageUrl: currentImageUrl || undefined,
+        return_type: currentImageUrl ? 'image' : undefined,
+        isNewMessage: true,
+        pdfText: pdfText || undefined  // Keep reference to the PDF text
+      };
+
+      // Add loading message
+      const loadingMessage: MessageType = {
+        id: now + 1,
+        content: '',
+        type: 'bot',
+        timestamp: new Date(now),
+        isLoading: true
+      };
+
+      const token = await getToken({ template: 'user_jwt' });
+      if (!token) {
+        throw new Error('Failed to retrieve session token.');
+      }
+
+      // Check if we need to create a new chat
+      let chatId = currentChat;
+      const currentChatInfo = chatHistory.find((chat) => chat.id === currentChat);
+      let shouldCreateNewChat = currentChat === 'New Chat' || !currentChatInfo || messages.length === 0;
+
+      // Also create a new chat if the selected model is different from the current chat's model
+      if (currentChatInfo && currentChatInfo.model !== model) {
+        shouldCreateNewChat = true;
+      }
+
+      // Safety check: If we're on the default screen and don't have a valid chat, create one
+      if (currentChat === 'New Chat' && !userData?.id) {
+        console.log('Safety check: Creating new chat for user on default screen');
+        await fetchUserData(); // Try to get user data again
+        shouldCreateNewChat = true;
+      }
+
+      if (shouldCreateNewChat) {
+        console.log('Creating new chat before sending message...');
+        // Create a new chat with the new model
+        const newChatResponse = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/create-chat`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'New Chat',
+            model: model,
+            user_id: userData?.id,
+            web_search_enabled: isWebSearchEnabled
+          }),
+        });
+
+        if (!newChatResponse.ok) {
+          throw new Error('Failed to create a new chat.');
+        }
+
+        const newChatData = await newChatResponse.json();
+        chatId = newChatData.chat_id;
+
+        // Add the new chat to chat history and set it as current
+        const newChat = {
+          id: chatId,
+          title: newChatData.name,
+          messages: [userMessageFrontend],
+          model: newChatData.model,
+          webSearchEnabled: isWebSearchEnabled
+        };
+
+        setChatHistory(prev => [newChat, ...prev]);
+        setCurrentChat(chatId);
+        setMessages([userMessageFrontend, loadingMessage]);
+      } else {
+        // Update messages in existing chat
+        setMessages(prevMessages => [...prevMessages, userMessageFrontend, loadingMessage]);
+        setChatHistory(prevChats => 
+          prevChats.map(chat => 
+            chat.id === currentChat
+              ? {
+                  ...chat,
+                  messages: [...(chat.messages || []), userMessageFrontend]
+                }
+              : chat
+          )
+        );
+      }
+
+      // Clear input and file previews
+      setInput('');
+      setImagePreview(null);
+      setPdfPreview(null);
+      setPdfFile(null);
+      setPdfText(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
+      // Reset textarea height
+      const textarea = document.querySelector('textarea');
+      if (textarea) {
+        textarea.style.height = 'auto';
+      }
+
+      // Get the system prompt and base model if the model is an agent
+      const agentInfo = isAgentModel(model) ? getAgentSystemPrompt(model) : undefined;
+      const actualModel = agentInfo?.baseModel || model;
+
+      // Update the user message sent to backend
+      const userMessage = {
+        chat_id: chatId,
+        user_id: userData?.id,
+        user_type: 'user',
+        content: messageContent, // Use combined message content
+        image_url: currentImageUrl || null,
+        model: actualModel,
+        system_prompt: agentInfo?.systemPrompt,
+        web_search_enabled: isWebSearchEnabled
+      };
+
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/add-message`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(userMessage),
+      });
+
+      if (!response.ok) {
+        if (response.status === 403) {
+          const errorData = await response.json();
+          if (errorData.error === 'Trial limit reached. Please upgrade your plan.') {
+            openUpgradeModal();
+            setMessages(prevMessages => prevMessages.filter(msg => !msg.isLoading));
+            setIsGenerating(false);
+            return;
+          }
+        }
+        throw new Error('Failed to send message.');
+      }
+
+      const { aiMessage, title, trial_prompt_count } = await response.json();
+
+      // Create the new message with proper mapping
+      const newAiMessage = {
+        ...mapToFrontendMessage(aiMessage),
+        isNewMessage: true
+      };
+
+      // After receiving AI response, update both states again
+      setMessages(prevMessages => {
+        const messagesWithoutLoading = prevMessages.filter(msg => !msg.isLoading);
+        return [...messagesWithoutLoading, newAiMessage];
+      });
+
+      setChatHistory(prevChats => 
+        prevChats.map(chat => 
+          chat.id === chatId 
+            ? { 
+                ...chat, 
+                title: title || chat.title,
+                messages: [...(chat.messages || []), newAiMessage],
+                webSearchEnabled: isWebSearchEnabled
+              } 
+            : chat
+        )
+      );
+
+      setTrialPromptCount(trial_prompt_count);
+      setIsGenerating(false);
+
+      // After successful send, cache the updated chat
+      const updatedChat = {
+        id: chatId,
+        title: title || 'New Chat',
+        messages: [...messages, userMessageFrontend, newAiMessage],
+        model: model,
+        timestamp: Date.now(),
+        version: CACHE_VERSION,
+        webSearchEnabled: isWebSearchEnabled
+      };
+      cacheChatHistory(updatedChat);
+    } catch (error) {
+      setIsGenerating(false);
+      setMessages(prevMessages => prevMessages.filter(msg => !msg.isLoading));
+      console.error('Error sending message:', error);
+    }
+  };
+
+  const handleSelectChat = async (id: string) => {
+    try {
+      setIsLoading(true);
+      if (id === currentChat) return; // Skip if already on this chat
+      
+      setCurrentChat(id);
+      
+      // Clear current messages
+      setMessages([]);
+      
+      // Find the selected chat in history
+      const selectedChat = chatHistory.find(chat => chat.id === id);
+      
+      if (selectedChat) {
+        // Set the model from the selected chat
+        setSelectedModel(selectedChat.model);
+        
+        // Set the web search status from the selected chat
+        setIsWebSearchEnabled(selectedChat.webSearchEnabled !== undefined ? selectedChat.webSearchEnabled : true);
+        
+        // If messages are already loaded, use them
+        if (selectedChat.messages && selectedChat.messages.length > 0) {
+          setMessages(selectedChat.messages);
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // Always fetch from server to ensure we have the latest data
+      const token = await getToken({ template: 'user_jwt' });
+      if (!token) {
+        throw new Error('Failed to retrieve session token.');
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/get-chat-history`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ chat_id: id }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch chat messages.');
+      }
+
+      const responseData = await response.json();
+      console.log('Server response data:', responseData);
+      
+      // Update the UI with server data
+      if (Array.isArray(responseData)) {
+        // If the response is just an array of messages
+        setMessages(responseData);
+      } else if (responseData.messages) {
+        // If the response includes both messages and metadata
+        setMessages(responseData.messages);
+        
+        // If the response includes model info, update the model selector
+        if (responseData.model) {
+          setSelectedModel(responseData.model as Model);
+          console.log(`Set model from server response: ${responseData.model}`);
+        }
+      }
+      
+      // Fallback to chatHistory if server didn't provide model info
+      if (!responseData.model) {
+        const chatInfo = chatHistory.find(chat => chat.id === id);
+        if (chatInfo?.model) {
+          setSelectedModel(chatInfo.model as Model);
+          console.log(`Set model from chat history: ${chatInfo.model}`);
+        }
+      }
+      
+      // Determine which model to use for caching
+      const modelToCache = responseData.model || 
+                          chatHistory.find(chat => chat.id === id)?.model || 
+                          selectedModel;
+      
+      // Update cache with the latest data from server
+      const chatToCache = {
+        id,
+        title: responseData.title || chatHistory.find(chat => chat.id === id)?.title || 'Untitled Chat',
+        messages: Array.isArray(responseData) ? responseData : (responseData.messages || []),
+        model: modelToCache, // Use the best model info we have
+        timestamp: Date.now(),
+        version: CACHE_VERSION  // Use the imported cache version constant
+      };
+      cacheChatHistory(chatToCache);
+      console.log(`Cached chat with model: ${modelToCache}`);
+
+    } catch (error) {
+      console.error('Error loading chat messages:', error);
+      // Show error to user
+      addNotification('Failed to load chat messages', 'error');
+    }
+  };
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const addNotification = (message: string, type: 'success' | 'error') => {
+    const id = Date.now();
+    setNotifications(prev => [...prev, { message, type, id }]);
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(notification => notification.id !== id));
+    }, 3000);
+  };
+
+  const handleDeleteChat = async () => {
+    try {
+      const token = await getToken({ template: 'user_jwt' });
+      if (!token) {
+        throw new Error('Failed to retrieve session token.');
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_BACKEND_URL}/api/delete-chat`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ chat_id: currentChat }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to delete chat.');
+      }
+
+      // Remove from cache
+      removeCachedChat(currentChat);
+
+      // Update chat history
+      setChatHistory((prev) => prev.filter((chat) => chat.id !== currentChat));
+      setCurrentChat('New Chat');
+      setMessages([]);
+    } catch (error) {
+      console.error('Error deleting chat:', error);
+    }
+  };
+
+  // Add new function to handle multiple chat deletions
+  const handleDeleteMultipleChats = async (chatIds: string[]) => {
+    try {
+      const token = await getToken({ template: 'user_jwt' });
+      if (!token) {
+        throw new Error('Failed to retrieve session token.');
+      }
+
+      // Delete each chat one by one
+      for (const chatId of chatIds) {
+        const response = await fetch(
+          `${import.meta.env.VITE_BACKEND_URL}/api/delete-chat`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ chat_id: chatId }),
+          }
+        );
+
+        if (!response.ok) {
+          console.error(`Failed to delete chat ${chatId}`);
+          continue; // Continue with other chats even if one fails
+        }
+
+        // Remove from cache
+        removeCachedChat(chatId);
+      }
+
+      // If current chat was deleted, reset to new chat
+      if (chatIds.includes(currentChat)) {
+        setCurrentChat('New Chat');
+        setMessages([]);
+      }
+
+      // Update chat history by removing all deleted chats
+      setChatHistory((prev) => prev.filter((chat) => !chatIds.includes(chat.id)));
+      
+      // Show success notification
+      addNotification(`Successfully deleted ${chatIds.length} chat(s)`, 'success');
+    } catch (error) {
+      console.error('Error deleting multiple chats:', error);
+      addNotification('Failed to delete some chats', 'error');
+    }
+  };
+
+  const handleClosePopup = () => {
+    setIsReferralPopupOpen(false);
+    localStorage.setItem('hasSeenReferralPopup', 'true');
+  };
+
+  const handleReferralSubmit = async () => {
+    const referralCodeInput = (document.querySelector('input[type="text"]') as HTMLInputElement)?.value;
+
+    if (!referralCodeInput || referralCodeInput.trim() === '') {
+      alert('Please enter a valid referral code.');
+      return;
+    }
+
+    try {
+      const token = await getToken({ template: 'user_jwt' });
+      if (!token) {
+        throw new Error('Failed to retrieve session token.');
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/submit-referral`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId: userData?.id, referralCode: referralCodeInput.trim() }),
+      });
+
+      console.log('Response:', response);
+
+      if (response.ok) {
+        const responseData = await response.json(); // Ensure this doesn't fail
+        console.log('Referral code applied successfully:', responseData);
+        alert('Referral code applied successfully!');
+        setIsReferralPopupOpen(false);
+        localStorage.setItem('hasSeenReferralPopup', 'true');
+      } else {
+        const errorText = await response.text(); // Read error text for debugging
+        console.error('Failed to apply referral code:', errorText);
+        alert('Invalid referral code. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error applying referral code:', error);
+      alert('An error occurred while applying the referral code. Please try again later.');
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('File dropped');
+
+    const files = Array.from(e.dataTransfer.files);
+    console.log('Dropped files:', files.map(f => f.name));
+
+    // Check file size (10MB limit)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
+    const hasLargeFile = files.some(file => file.size > MAX_FILE_SIZE);
+    if (hasLargeFile) {
+      alert('One or more files exceed the 10MB size limit. Please upload smaller files.');
+      return;
+    }
+
+    // Check for GIF files and reject them
+    const hasGifFile = files.some(file => 
+      file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif')
+    );
+    
+    if (hasGifFile) {
+      alert('GIF files are not supported. Please upload a PNG or JPEG image.');
+      return;
+    }
+
+    const imageFile = files.find(file => file.type.startsWith('image/'));
+    const pdfFile = files.find(file => file.type === 'application/pdf');
+
+    // Reset previous uploads
+    setImagePreview(null);
+    setPdfPreview(null);
+    setPdfFile(null);
+    setPdfText(null);
+
+    if (imageFile) {
+      console.log('Processing dropped image file:', imageFile.name);
+      // Handle image upload (existing logic)
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string);
+        console.log('Image preview set');
+      };
+      reader.readAsDataURL(imageFile);
+
+      // Update the file input
+      if (fileInputRef.current) {
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(imageFile);
+        fileInputRef.current.files = dataTransfer.files;
+      }
+    } else if (pdfFile) {
+      console.log('Processing dropped PDF file:', pdfFile.name);
+      // Handle PDF drop
+      setPdfFile(pdfFile);
+      console.log('PDF file state set');
+      
+      try {
+        // Extract text from PDF
+        console.log('Starting PDF text extraction from dropped file');
+        const extractedText = await extractTextFromPDF(pdfFile);
+        console.log('Text extracted successfully from dropped file, length:', extractedText.length);
+        setPdfText(extractedText);
+        console.log('PDF text state updated from dropped file');
+      } catch (error) {
+        console.error('Error extracting text from dropped PDF:', error);
+      }
+      
+      // Update the file input
+      if (fileInputRef.current) {
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(pdfFile);
+        fileInputRef.current.files = dataTransfer.files;
+      }
+    } else {
+      console.log('No supported files found in drop');
+    }
+  };
+
+  return (
+    <div className={`h-screen flex ${isDark ? 'bg-[#1B252F]' : 'bg-white'}`}>
+      {/* Move Notifications Container above chat input */}
+      <div className="fixed bottom-32 left-1/2 transform -translate-x-1/2 z-50 space-y-2 w-full max-w-xl px-4">
+        {notifications.map((notification) => (
+          <div
+            key={notification.id}
+            className={`flex items-center justify-between gap-2 px-4 py-2 rounded-lg text-white transform transition-all duration-300 ease-in-out ${
+              notification.type === 'success' ? 'bg-green-600' : 'bg-red-600'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {notification.type === 'success' ? (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+              <span>{notification.message}</span>
+            </div>
+            <button
+              onClick={() => setNotifications(prev => prev.filter(n => n.id !== notification.id))}
+              className="ml-2 hover:opacity-80 flex-shrink-0"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Referral Popup */}
+      {isReferralPopupOpen && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+          <div className="bg-white rounded-lg shadow-lg relative overflow-hidden">
+            <div className="bg-gradient-to-r from-yellow-400 via-purple-500 to-pink-500 p-6 text-center">
+              <h2 className="text-lg font-semibold text-white">Have a referral code?</h2>
+            </div>
+            <div className="p-6">
+              <button
+                onClick={handleClosePopup}
+                className="absolute top-2 right-2 p-1 rounded-full bg-red-500 text-white hover:bg-red-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+              <input
+                type="text"
+                placeholder="Enter referral code"
+                className="w-full p-2 border border-gray-300 rounded mb-4"
+              />
+              <button
+                onClick={handleReferralSubmit}
+                className="w-full bg-gradient-to-r from-yellow-400 via-purple-500 to-pink-500 text-white p-2 rounded hover:opacity-90"
+              >
+                Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+        {/* Mobile Overlay */}
+        {isMobileSidebarOpen && (
+            <div
+                className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+                onClick={() => setIsMobileSidebarOpen(false)}
+            />
+        )}
+
+        {/* Sidebar */}
+        <div
+            ref={sidebarRef}
+            className={`fixed md:relative w-64 h-full transform ${
+                isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+            } md:translate-x-0 md:${isSidebarVisible ? 'block' : 'hidden'} transition-transform duration-300 ease-in-out z-50`}
+        >
+          <Sidebar
+              onNewChat={startNewChat}
+              currentChat={currentChat}
+              onSelectChat={(id) => handleSelectChat(id)}
+              onSettingsClick={() => navigate('/settings')}
+              chatHistory={chatHistory}
+              onReferClick={() => setIsReferModalOpen(true)}
+              onDeleteChats={handleDeleteMultipleChats}
+          />
+        </div>
+
+        <main className={`flex-1 flex flex-col h-screen relative overflow-hidden transition-all duration-300`}>
+          {/* Mobile Header */}
+          <header className="md:hidden flex items-center justify-between px-4 py-3 bg-white dark:bg-[#202C37] border-b border-gray-200 dark:border-gray-700">
+            <button
+              onClick={() => setIsMobileSidebarOpen(true)}
+              className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#2A3744] text-gray-600 dark:text-gray-300"
+              aria-label="Open sidebar"
+            >
+              <Menu className="h-6 w-6" />
+            </button>
+            <h1 className="text-xl font-semibold text-gray-800 dark:text-white">
+              {(chatHistory.find(chat => chat.id === currentChat)?.title || currentChat).replace(/^"|"$/g, '')}
+            </h1>
+            <div className="w-6"></div> {/* Empty div for centering */}
+          </header>
+
+          {/* Desktop Header */}
+          <header className={`hidden md:block sticky top-0 z-10 py-4 ${isDark ? 'bg-[#1B252F]' : 'bg-white'}`}>
+            <div className="w-full flex items-center relative">
+              <div className={`flex items-center ${!isSidebarVisible ? 'pl-4' : 'pl-2'}`} style={{ marginLeft: isSidebarVisible ? '10px' : '0' }}>
+                {isSidebarVisible ? (
+                  <button
+                    onClick={() => setIsSidebarVisible(false)}
+                    className={`p-1 rounded-lg transition-colors mr-2 ${
+                      isDark ? 'hover:bg-[#2A3744] text-[#E2E2E2]' : 'hover:bg-gray-100 text-[#514EB7]'
+                    }`}
+                    aria-label="Hide sidebar"
+                  >
+                    <ChevronLeft className="h-6 w-6" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setIsSidebarVisible(true)}
+                    className={`p-1 rounded-lg transition-colors ${
+                      isDark ? 'hover:bg-[#2A3744] text-[#E2E2E2]' : 'hover:bg-gray-100 text-[#514EB7]'
+                    }`}
+                    aria-label="Show sidebar"
+                  >
+                    <ChevronRight className="h-6 w-6" />
+                  </button>
+                )}
+                
+                {/* Title and delete button */}
+                <h1 className={`text-xl font-semibold ${isDark ? 'text-[#E2E2E2]' : 'text-gray-800'}`}>
+                  {(chatHistory.find(chat => chat.id === currentChat)?.title || currentChat).replace(/^"|"$/g, '')}
+                </h1>
+                <div className="ml-2 flex items-center">
+                  <button
+                    onClick={handleDeleteChat}
+                    className={`p-1 rounded-lg transition-colors ${
+                      isDark ? 'hover:bg-[#2A3744] text-[#E2E2E2]' : 'hover:bg-gray-100 text-[#514EB7]'
+                    }`}
+                    aria-label="Delete chat"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              
+              {/* Controls on the right */}
+              <div className="ml-auto flex items-center space-x-6 pr-6">
+                <div className="flex items-center space-x-2">
+                  <span className={`text-sm ${isDark ? 'text-[#E2E2E2]' : 'text-gray-600'}`}>
+                    {isCreativeMode ? 'Creative Mode' : 'Text Mode'}
+                  </span>
+                  <ToggleSwitch 
+                    enabled={isCreativeMode} 
+                    onChange={setIsCreativeMode}
+                    icon={
+                      <img 
+                        src={isCreativeMode ? "/camera-icon.png" : "/chat-icon.png"} 
+                        alt={isCreativeMode ? "Camera icon" : "Chat icon"}
+                        className="h-4 w-4"
+                      />
+                    }
+                  />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className={`text-sm ${isDark ? 'text-[#E2E2E2]' : 'text-gray-600'}`}>
+                    Web Search
+                  </span>
+                  <ToggleSwitch 
+                    enabled={isWebSearchEnabled} 
+                    onChange={setIsWebSearchEnabled}
+                    icon={<Globe className="h-4 w-4" />}
+                  />
+                </div>
+                <ModelSelector
+                  selectedModel={selectedModel}
+                  onModelSelect={setSelectedModel}
+                  isCreativeMode={isCreativeMode}
+                  isOpen={isModelSelectorOpen}
+                  onOpenChange={setIsModelSelectorOpen}
+                />
+              </div>
+            </div>
+          </header>
+
+          {/* Messages Container */}
+          <div 
+            ref={messagesContainerRef}
+            className={`flex-1 overflow-y-auto min-h-0 ${isDark ? 'bg-[#1B252F] dark-scrollbar' : 'bg-white'}`}
+            onScroll={handleScroll}
+          >
+            <div className="max-w-3xl mx-auto px-6 py-4 pb-24">
+              {messages.map((message) => (
+                <ChatMessage 
+                  key={message.id} 
+                  message={message} 
+                  theme={theme}
+                  selectedModel={chatHistory.find(chat => chat.id === currentChat)?.model || selectedModel}
+                  animationsEnabled={animationsEnabled && !message.isNewMessage}
+                  isLoading={message.isLoading}
+                  LoadingComponent={LoadingDots}
+                />
+              ))}
+              {messages.length === 0 && showSuggestions && isInitialized && (
+                <div className="flex flex-col items-center justify-center h-full py-12">
+                  <div className="w-24 h-24 mb-8">
+                    <img src="/whiziLogo.png" alt="Whizi Logo" className="w-full h-full" />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-2xl px-4">
+                    {suggestions.map((suggestion, index) => (
+                      <button
+                        key={index}
+                        onClick={() => {
+                          setInput(suggestion.title);
+                          setShowSuggestions(false);
+                        }}
+                        className={`text-left p-4 rounded-2xl transition-colors ${
+                          isDark
+                            ? 'bg-[#202C37] hover:bg-[#2A3744] text-[#E2E2E2]'
+                            : 'bg-gray-100 hover:bg-gray-200'
+                        }`}
+                        disabled={!isInitialized}
+                      >
+                        <h3 className="font-medium mb-1">{suggestion.title}</h3>
+                        <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                          {suggestion.subtitle}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+
+          {/* Input Container */}
+          <div className={`absolute md:fixed bottom-0 inset-x-0 ${isSidebarVisible ? 'md:left-64 md:right-0' : 'left-0 right-0'} px-4 md:px-6 py-4 flex justify-center ${isDark ? 'bg-[#1B252F]' : 'bg-white'} transition-all duration-300`}>
+            <div className="w-full max-w-6xl">
+              {imagePreview && (
+                  <div className="relative inline-block mb-2">
+                      <img
+                          src={imagePreview}
+                          alt="Preview"
+                          className="h-16 w-16 object-cover rounded-lg"
+                      />
+                      <button
+                          onClick={clearFilePreview}
+                          className="absolute -top-2 -right-2 p-1 rounded-full bg-red-500 text-white hover:bg-red-600"
+                      >
+                          <X className="h-3 w-3" />
+                      </button>
+                  </div>
+              )}
+              {pdfText && (
+                <div className="mb-4 relative">
+                  <div className={`p-3 rounded-lg ${
+                    isDark ? 'bg-[#2A3744] text-[#E2E2E2]' : 'bg-gray-100 text-gray-800'
+                  } text-sm max-h-40 overflow-y-auto`}>
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-medium">Extracted PDF Text:</span>
+                      <button
+                        onClick={clearFilePreview}
+                        className="p-1 rounded-full bg-red-500 text-white hover:bg-red-600 flex items-center justify-center"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="whitespace-pre-wrap break-words">
+                      {pdfText.length > 500 
+                        ? `${pdfText.substring(0, 500)}...` 
+                        : pdfText}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <form onSubmit={(e) => handleSend(e, selectedModel)} className="w-full" onDragOver={handleDragOver} onDrop={handleDrop}>
+                <div
+                  className={`relative glowing-edge-container flex items-center space-x-2 rounded-[var(--chat-border-radius)] px-4 py-1 focus-within:ring-2 focus-within:ring-[#514EB7] ${
+                    isDark ? 'bg-[#1B252F] shadow-dark' : 'bg-white border border-gray-300 shadow-light'
+                  } ${!isInitialized ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <div className="flex-1 min-w-0 px-2 py-2">
+                    <textarea
+                      value={input}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        e.target.style.height = 'auto';
+                        e.target.style.height = `${e.target.scrollHeight}px`;
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSend(e, selectedModel);
+                        }
+                      }}
+                      onPaste={(e) => {
+                        if (!isInitialized) {
+                          e.preventDefault();
+                          return;
+                        }
+                        const items = e.clipboardData?.items;
+                        const imageItem = Array.from(items || []).find(
+                          item => item.type.startsWith('image/')
+                        );
+
+                        if (imageItem) {
+                          e.preventDefault();
+                          const file = imageItem.getAsFile();
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                              setImagePreview(reader.result as string);
+                              if (fileInputRef.current) {
+                                const dataTransfer = new DataTransfer();
+                                dataTransfer.items.add(file);
+                                fileInputRef.current.files = dataTransfer.files;
+                              }
+                            };
+                            reader.readAsDataURL(file);
+                          }
+                        }
+                      }}
+                      rows={1}
+                      style={{ resize: 'none' }}
+                      placeholder={
+                        isCreativeMode
+                          ? "Describe the image you'd like to generate, or upload an image to edit..."
+                          : "Type your message or upload an image/PDF..."
+                      }
+                      className={`w-full focus:outline-none pt-1 ${
+                        isDark ? 'bg-[#1B252F] text-[#E2E2E2]' : 'bg-white text-gray-900'
+                      } min-h-[24px] max-h-[150px] overflow-y-auto break-words whitespace-pre-wrap text-sm`}
+                      disabled={!isInitialized}
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <label className={`cursor-pointer text-[#514EB7] hover:text-opacity-80 transition-colors ${!isInitialized ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                      <Image className="h-5 w-5"/>
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        accept=".png,.jpg,.jpeg,.pdf,.js,.ts,.jsx,.tsx,.py,.java,.cpp,.c,.cs,.rb,.php,.go,.rs,.swift,.html,.css,.scss,.sass,.less,.json,.xml,.yaml,.yml,.env,.ini,.conf,.md,.txt,.csv,.sh,.bash,.zsh,.fish,.sql,.graphql,.r,.m,.kt,.kts,.scala,.lua,.pl,.pm"
+                        onChange={handleFileUpload}
+                        className="hidden"
+                        disabled={!isInitialized}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      className={`text-[#514EB7] hover:text-opacity-80 transition-colors ${!isInitialized ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      disabled={!isInitialized}
+                    >
+                      <Send className="h-5 w-5"/>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </main>
+
+      <ReferModal
+          isOpen={isReferModalOpen}
+          onClose={() => setIsReferModalOpen(false)}
+          referralCode={userData?.referral_code}
+      />
+      <style>{`
+        :root {
+          --chat-border-radius: 20px;
+        }
+
+        /* Dark mode scrollbar styles */
+        .dark-scrollbar::-webkit-scrollbar {
+          width: 10px;
+        }
+
+        .dark-scrollbar::-webkit-scrollbar-track {
+          background: #1B252F;
+        }
+
+        .dark-scrollbar::-webkit-scrollbar-thumb {
+          background: #2A3744;
+          border-radius: 5px;
+        }
+
+        .dark-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #374757;
+        }
+
+        @keyframes moveGradient {
+          0% {
+            background-position: 0% 0%;
+          }
+          100% {
+            background-position: 200% 0%;
+          } 
+        }
+        .glowing-edge-container {
+          position: relative;
+          isolation: isolate;
+        }
+        .shadow-light {
+          box-shadow: 0 4px 20px rgba(103, 100, 192, 0.7);
+        }
+        .shadow-dark {
+          box-shadow: 0 4px 20px rgba(103, 100, 192, 0.1);
+        }
+        .glowing-edge-container::before {
+          content: '';
+          position: absolute;
+          inset: -2px;
+          border-radius: var(--chat-border-radius);
+          background: linear-gradient(
+            90deg,
+            transparent,
+            rgba(81, 78, 183, 0.0) 25%,
+            rgba(81, 78, 183, 0.9) 45%,
+            transparent
+          );
+          background-size: 200% 100%;
+          animation: moveGradient 1.7s linear infinite;
+          z-index: -1;
+        }
+        .glowing-edge-container::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: ${isDark ? '#1B252F' : 'white'};
+          border-radius: var(--chat-border-radius);
+          z-index: -1;
+        }
+        @keyframes bounce-dot {
+          0%, 100% {
+            transform: translateY(0);
+          }
+          50% {
+            transform: translateY(-7px);
+          }
+        }
+      `}</style>
+    </div>
+  );
+}

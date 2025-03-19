@@ -179,81 +179,219 @@ export class Vehicle {
    * @returns {Promise} Promise that resolves when the model is loaded
    */
   async loadModel() {
-    return new Promise((resolve) => {
-      // Simple vehicle mesh for now
-      // In a real application, you would load a GLTF model
+    return new Promise((resolve, reject) => {
+      console.log("Starting vehicle model loading process...");
       
-      // Create chassis mesh
-      const chassisGeometry = new THREE.BoxGeometry(this.width, this.height, this.length);
-      const chassisMaterial = new THREE.MeshPhongMaterial({ color: 0x990000 });
-      this.chassis = new THREE.Mesh(chassisGeometry, chassisMaterial);
-      this.chassis.castShadow = true;
-      this.chassis.receiveShadow = true;
-      this.scene.add(this.chassis);
+      // We'll directly load the Ferrari F40 model which we know exists
+      const modelPath = './winterVibe/ferrari_f40.glb';
+      console.log(`Loading model from path: ${modelPath}`);
       
-      // Link chassis to physics body
-      this.chassis.userData.physicsBody = this.chassisBody;
-      
-      // Create wheel meshes
-      const wheelGeometry = new THREE.CylinderGeometry(0.33, 0.33, 0.2, 24);
-      const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
-      
-      // Rotate wheel geometry to match physics
-      wheelGeometry.rotateZ(Math.PI / 2);
-      
-      // Create wheel meshes
-      for (let i = 0; i < 4; i++) {
-        const wheelMesh = new THREE.Mesh(wheelGeometry, wheelMaterial);
-        wheelMesh.castShadow = true;
-        this.scene.add(wheelMesh);
-        this.wheels.push(wheelMesh);
-      }
-      
-      // Create steering wheel
-      const steeringWheelGeometry = new THREE.TorusGeometry(0.3, 0.03, 16, 32);
-      const steeringWheelMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
-      this.steeringWheel = new THREE.Mesh(steeringWheelGeometry, steeringWheelMaterial);
-      
-      // Add spokes to the steering wheel
-      const spokeGeometry = new THREE.BoxGeometry(0.6, 0.02, 0.02);
-      const spokeMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
-      
-      // Horizontal spoke
-      const horizontalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
-      this.steeringWheel.add(horizontalSpoke);
-      
-      // Vertical spoke
-      const verticalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
-      verticalSpoke.rotation.z = Math.PI / 2;
-      this.steeringWheel.add(verticalSpoke);
-      
-      // Position steering wheel in the vehicle
-      this.steeringWheel.position.set(0, 0.9, 0.7);
-      this.steeringWheel.rotation.x = Math.PI / 2;
-      this.chassis.add(this.steeringWheel);
-      
-      // Create windshield
-      const windshieldGeometry = new THREE.PlaneGeometry(1.7, 1);
-      const windshieldMaterial = new THREE.MeshPhongMaterial({
-        color: 0xaaddff,
-        transparent: true,
-        opacity: 0.3,
-        side: THREE.DoubleSide
-      });
-      const windshield = new THREE.Mesh(windshieldGeometry, windshieldMaterial);
-      windshield.position.set(0, 1.2, 0.35);
-      windshield.rotation.x = Math.PI / 3;
-      this.chassis.add(windshield);
-      
-      // Add a simple dashboard
-      const dashboardGeometry = new THREE.BoxGeometry(1.7, 0.3, 0.2);
-      const dashboardMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
-      const dashboard = new THREE.Mesh(dashboardGeometry, dashboardMaterial);
-      dashboard.position.set(0, 0.8, 0.4);
-      this.chassis.add(dashboard);
-      
-      resolve();
+      this.loader.load(
+        modelPath,
+        (gltf) => {
+          // Model loaded successfully
+          console.log(`Ferrari F40 model loaded successfully!`);
+          
+          // Set the chassis to the loaded model
+          this.chassis = gltf.scene;
+          
+          // Configure Ferrari F40 specific settings
+          console.log("Applying Ferrari F40 specific settings");
+          this.chassis.scale.set(0.7, 0.7, 0.7); // Scale for Ferrari F40
+          this.chassis.rotation.y = Math.PI; // Rotate to face forward
+          
+          // Enable shadows
+          this.chassis.castShadow = true;
+          this.chassis.receiveShadow = true;
+          
+          // Apply shadows to all child meshes
+          this.chassis.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              console.log(`Applied shadows to mesh: ${child.name}`);
+            }
+          });
+          
+          // Add the model to the scene
+          this.scene.add(this.chassis);
+          console.log("Added Ferrari model to scene");
+          
+          // Link chassis to physics body
+          this.chassis.userData.physicsBody = this.chassisBody;
+          
+          // Find wheels in the model
+          console.log("Searching for wheels in the Ferrari model...");
+          const wheelRadius = 0.33;
+          const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+          
+          // Try to find wheels in the model using extended pattern matching
+          let wheelMeshes = [];
+          this.chassis.traverse((child) => {
+            const lowerName = child.name.toLowerCase();
+            // Look for common wheel naming patterns
+            if (lowerName.includes('wheel') || 
+                lowerName.includes('tire') || 
+                lowerName.includes('tyre') ||
+                lowerName.includes('rim') ||
+                lowerName.match(/wheel[_-]?[fr]?[lr]/) || // wheel_fl, wheel_fr, wheel_rl, wheel_rr
+                lowerName.match(/w[fr][lr]/)) {          // wfl, wfr, wrl, wrr
+              console.log(`Found wheel in Ferrari model: ${child.name}`);
+              wheelMeshes.push(child);
+            }
+          });
+          
+          // If no wheels found in the model, create them
+          if (wheelMeshes.length < 4) {
+            console.log(`Only found ${wheelMeshes.length} wheels in model, creating procedural wheels`);
+            const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.2, 24);
+            wheelGeometry.rotateZ(Math.PI / 2);
+            
+            // Create wheel meshes
+            for (let i = 0; i < 4; i++) {
+              const wheelMesh = new THREE.Mesh(wheelGeometry, wheelMaterial);
+              wheelMesh.castShadow = true;
+              this.scene.add(wheelMesh);
+              this.wheels.push(wheelMesh);
+            }
+          } else {
+            // Use the wheels from the model
+            console.log(`Using ${wheelMeshes.length} wheels from the Ferrari model`);
+            this.wheels = wheelMeshes;
+          }
+          
+          // Debug the wheels array
+          console.log(`Final wheel count: ${this.wheels.length}`);
+          
+          // Create steering wheel
+          console.log("Setting up steering wheel...");
+          let steeringWheelFound = false;
+          this.chassis.traverse((child) => {
+            const lowerName = child.name.toLowerCase();
+            if (lowerName.includes('steering') || lowerName.includes('steer') || lowerName.includes('wheel_steer')) {
+              console.log(`Found steering wheel in model: ${child.name}`);
+              this.steeringWheel = child;
+              steeringWheelFound = true;
+            }
+          });
+          
+          if (!steeringWheelFound) {
+            console.log("No steering wheel found in model, creating a procedural one");
+            // Create steering wheel
+            const steeringWheelGeometry = new THREE.TorusGeometry(0.3, 0.03, 16, 32);
+            const steeringWheelMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
+            this.steeringWheel = new THREE.Mesh(steeringWheelGeometry, steeringWheelMaterial);
+            
+            // Add spokes to the steering wheel
+            const spokeGeometry = new THREE.BoxGeometry(0.6, 0.02, 0.02);
+            const spokeMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
+            
+            // Horizontal spoke
+            const horizontalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
+            this.steeringWheel.add(horizontalSpoke);
+            
+            // Vertical spoke
+            const verticalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
+            verticalSpoke.rotation.z = Math.PI / 2;
+            this.steeringWheel.add(verticalSpoke);
+            
+            // Position steering wheel in the vehicle
+            this.steeringWheel.position.set(0, 0.9, 0.7);
+            this.steeringWheel.rotation.x = Math.PI / 2;
+            this.chassis.add(this.steeringWheel);
+          }
+          
+          console.log("Ferrari F40 model setup complete!");
+          resolve();
+        },
+        // Progress callback
+        (xhr) => {
+          const percent = Math.round(xhr.loaded / xhr.total * 100);
+          console.log(`Loading Ferrari F40 model: ${percent}%`);
+        },
+        // Error callback
+        (error) => {
+          console.error(`Error loading Ferrari F40 model:`, error);
+          console.log("Falling back to simple car model");
+          this.createSimpleCarModel();
+          resolve();
+        }
+      );
     });
+  }
+  
+  /**
+   * Create a simple car model as fallback if GLTF loading fails
+   */
+  createSimpleCarModel() {
+    // Create chassis mesh
+    const chassisGeometry = new THREE.BoxGeometry(this.width, this.height, this.length);
+    const chassisMaterial = new THREE.MeshPhongMaterial({ color: 0x990000 });
+    this.chassis = new THREE.Mesh(chassisGeometry, chassisMaterial);
+    this.chassis.castShadow = true;
+    this.chassis.receiveShadow = true;
+    this.scene.add(this.chassis);
+    
+    // Link chassis to physics body
+    this.chassis.userData.physicsBody = this.chassisBody;
+    
+    // Create wheel meshes
+    const wheelGeometry = new THREE.CylinderGeometry(0.33, 0.33, 0.2, 24);
+    const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+    
+    // Rotate wheel geometry to match physics
+    wheelGeometry.rotateZ(Math.PI / 2);
+    
+    // Create wheel meshes
+    for (let i = 0; i < 4; i++) {
+      const wheelMesh = new THREE.Mesh(wheelGeometry, wheelMaterial);
+      wheelMesh.castShadow = true;
+      this.scene.add(wheelMesh);
+      this.wheels.push(wheelMesh);
+    }
+    
+    // Create steering wheel
+    const steeringWheelGeometry = new THREE.TorusGeometry(0.3, 0.03, 16, 32);
+    const steeringWheelMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
+    this.steeringWheel = new THREE.Mesh(steeringWheelGeometry, steeringWheelMaterial);
+    
+    // Add spokes to the steering wheel
+    const spokeGeometry = new THREE.BoxGeometry(0.6, 0.02, 0.02);
+    const spokeMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
+    
+    // Horizontal spoke
+    const horizontalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
+    this.steeringWheel.add(horizontalSpoke);
+    
+    // Vertical spoke
+    const verticalSpoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
+    verticalSpoke.rotation.z = Math.PI / 2;
+    this.steeringWheel.add(verticalSpoke);
+    
+    // Position steering wheel in the vehicle
+    this.steeringWheel.position.set(0, 0.9, 0.7);
+    this.steeringWheel.rotation.x = Math.PI / 2;
+    this.chassis.add(this.steeringWheel);
+    
+    // Create windshield
+    const windshieldGeometry = new THREE.PlaneGeometry(1.7, 1);
+    const windshieldMaterial = new THREE.MeshPhongMaterial({
+      color: 0xaaddff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide
+    });
+    const windshield = new THREE.Mesh(windshieldGeometry, windshieldMaterial);
+    windshield.position.set(0, 1.2, 0.35);
+    windshield.rotation.x = Math.PI / 3;
+    this.chassis.add(windshield);
+    
+    // Add a simple dashboard
+    const dashboardGeometry = new THREE.BoxGeometry(1.7, 0.3, 0.2);
+    const dashboardMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+    const dashboard = new THREE.Mesh(dashboardGeometry, dashboardMaterial);
+    dashboard.position.set(0, 0.8, 0.4);
+    this.chassis.add(dashboard);
   }
   
   /**
@@ -380,8 +518,14 @@ export class Vehicle {
       }
       // Start reversing immediately when slow enough
       else {
-        // Much stronger reverse force - about 2x what it was
-        engineForce = -smoothThrottle * this.maxForce * 1.6;
+        // Much stronger reverse force - increased to allow up to 30 km/h reverse speed
+        engineForce = -smoothThrottle * this.maxForce * 5.0;
+        
+        // Limit reverse speed to 30 km/h (actual speed is in reverse so it's negative)
+        if (!isMovingForward && actualSpeed > 30) {
+          engineForce = 0;
+        }
+        
         brakeForce = 0;
       }
     } 
@@ -415,7 +559,7 @@ export class Vehicle {
     // Apply initial impulse to help start moving from standstill
     if ((throttle > 0.1 || reverse) && actualSpeed < 2) {
       // Apply stronger impulse in reverse
-      const impulseStrength = reverse ? 500 : -300;
+      const impulseStrength = reverse ? 1000 : -300;
       const impulse = new CANNON.Vec3(0, 0, impulseStrength);
       const worldImpulse = new CANNON.Vec3();
       this.chassisBody.quaternion.vmult(impulse, worldImpulse);
