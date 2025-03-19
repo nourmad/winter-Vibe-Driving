@@ -32,7 +32,7 @@ export class Vehicle {
     
     // Engine properties
     this.maxForce = 3000;       // Reduced from 8000 to prevent flipping
-    this.maxBrakeForce = 100;
+    this.maxBrakeForce = 500;   // Increased from 100 to 500 for stronger braking
     this.maxSteeringAngle = Math.PI / 4; // 45 degrees
     
     // Current vehicle state
@@ -313,7 +313,7 @@ export class Vehicle {
    */
   updateSteering(steeringInput, deltaTime) {
     // Calculate target steering angle
-    const targetAngle = steeringInput * this.maxSteeringAngle;
+    const targetAngle = -steeringInput * this.maxSteeringAngle;
     
     // Smooth steering transitions
     const steeringSpeed = 3.0; // How quickly steering responds
@@ -351,22 +351,52 @@ export class Vehicle {
     // Less aggressive throttle smoothing
     const smoothThrottle = Math.min(throttle * Math.min(1, this.speed/3 + 0.5), 1);
     
-    // Apply engine force based on throttle and direction
-    if (reverse && this.speed < 30) {
-      // Reverse
-      engineForce = -smoothThrottle * this.maxForce * 0.7;
-    } else if (!reverse) {
+    // Debug speed info
+    console.log(`Speed: ${this.speed.toFixed(2)} km/h, Reverse: ${reverse}`);
+    
+    // Calculate actual direction - positive = forward, negative = backward
+    const velocity = this.chassisBody.velocity;
+    const chassisQuat = this.chassisBody.quaternion;
+    const forwardDir = new CANNON.Vec3(0, 0, -1);
+    chassisQuat.vmult(forwardDir, forwardDir);
+    
+    const velInForwardDir = 
+      velocity.x * forwardDir.x + 
+      velocity.y * forwardDir.y + 
+      velocity.z * forwardDir.z;
+    
+    // Check if we're moving forward or backward
+    const isMovingForward = velInForwardDir < 0; // Car faces -Z direction
+    const actualSpeed = Math.abs(velInForwardDir) * 3.6; // km/h
+    
+    console.log(`Moving forward: ${isMovingForward}, Actual speed: ${actualSpeed.toFixed(2)}`);
+    
+    // Reverse logic with higher max speed
+    if (reverse) {
+      // Apply stronger brakes when going forward
+      if (isMovingForward && actualSpeed > 5) {
+        brakeForce = this.maxBrakeForce * 1.5; // Even stronger braking when trying to reverse
+        engineForce = 0;
+      }
+      // Start reversing immediately when slow enough
+      else {
+        // Much stronger reverse force - about 2x what it was
+        engineForce = -smoothThrottle * this.maxForce * 1.6;
+        brakeForce = 0;
+      }
+    } 
+    else if (!reverse) {
       // Forward
       engineForce = smoothThrottle * this.maxForce;
+      
+      // Apply stronger brakes when brake is pressed
+      brakeForce = brake * this.maxBrakeForce * 1.5;
       
       // Apply boost if requested
       if (boost) {
         engineForce *= 1.5;
       }
     }
-    
-    // Apply brake force
-    brakeForce = brake * this.maxBrakeForce;
     
     // Apply forces to wheels
     for (let i = 0; i < 4; i++) {
@@ -382,9 +412,11 @@ export class Vehicle {
       this.vehicle.setBrake(brakeForce, i);
     }
     
-    // Apply a stronger impulse to help overcome initial friction
-    if (throttle > 0.1 && this.speed < 3) {
-      const impulse = new CANNON.Vec3(0, 0, reverse ? 200 : -200);
+    // Apply initial impulse to help start moving from standstill
+    if ((throttle > 0.1 || reverse) && actualSpeed < 2) {
+      // Apply stronger impulse in reverse
+      const impulseStrength = reverse ? 500 : -300;
+      const impulse = new CANNON.Vec3(0, 0, impulseStrength);
       const worldImpulse = new CANNON.Vec3();
       this.chassisBody.quaternion.vmult(impulse, worldImpulse);
       this.chassisBody.applyImpulse(worldImpulse, this.chassisBody.position);
