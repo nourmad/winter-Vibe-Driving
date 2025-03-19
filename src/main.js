@@ -10,6 +10,8 @@ import { Physics } from './physics/Physics.js';
 
 class DrivingSimulator {
   constructor() {
+    console.log("Initializing simulator...");
+    
     // Core elements
     this.canvas = document.getElementById('canvas');
     this.scene = new THREE.Scene();
@@ -18,6 +20,8 @@ class DrivingSimulator {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    
+    console.log("Core elements initialized");
     
     // Game elements
     this.gameState = new GameState();
@@ -28,36 +32,55 @@ class DrivingSimulator {
     this.terrain = new TerrainGenerator(this.scene, this.physics);
     this.snowEffect = new SnowEffect(this.scene);
     
+    console.log("Game elements initialized");
+    
     // Setup controls
     this.setupUIControls();
     
     // Setup lighting
     this.setupLighting();
     
+    console.log("Starting loading process...");
+    
     // Start loading process
     this.init();
   }
   
   init() {
+    console.log("Initializing physics...");
     // Initialize physics
     this.physics.init();
     
+    console.log("Loading vehicle...");
     // Load vehicle and place it on the terrain
     this.vehicle.init().then(() => {
+      console.log("Vehicle loaded, setting up cameras...");
       // When vehicle is loaded, set up cameras
       this.cameraManager.init(this.vehicle.chassis);
       
+      console.log("Generating terrain...");
       // Generate the terrain
       this.terrain.generate();
       
+      console.log("Setting up snow effect...");
       // Set up snow effect
       this.snowEffect.init();
       
+      console.log("Loading complete!");
       // Hide loading screen
-      document.getElementById('loading').style.display = 'none';
+      const loadingElement = document.getElementById('loading');
+      if (loadingElement) {
+        loadingElement.style.display = 'none';
+      }
       
       // Start animation loop
       this.animate();
+    }).catch(error => {
+      console.error("Error during initialization:", error);
+      const loadingElement = document.getElementById('loading');
+      if (loadingElement) {
+        loadingElement.textContent = "Error loading simulation: " + error.message;
+      }
     });
     
     // Handle window resize
@@ -128,7 +151,10 @@ class DrivingSimulator {
     this.snowEffect.update(delta);
     
     // Update UI
-    document.getElementById('speed').textContent = `Speed: ${Math.round(this.vehicle.getSpeed())} km/h`;
+    const speedElement = document.getElementById('speed');
+    if (speedElement) {
+      speedElement.textContent = `Speed: ${Math.round(this.vehicle.getSpeed())} km/h`;
+    }
     
     // Render
     this.renderer.render(this.scene, this.camera);
@@ -137,5 +163,6 @@ class DrivingSimulator {
 
 // Start the simulator when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
+  console.log("DOM loaded, creating simulator...");
   const simulator = new DrivingSimulator();
 }); 

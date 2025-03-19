@@ -8,21 +8,14 @@ export class SnowEffect {
     this.scene = scene;
     
     // Snowfall properties
-    this.particleCount = 5000;  // Number of snowflakes
+    this.particleCount = 3000;  // Reduced for performance
     this.particleSize = 0.05;   // Size of snowflakes
-    this.fallSpeed = 0.3;       // How fast snow falls
-    this.windStrength = 0.1;    // Wind strength
-    this.windDirection = new THREE.Vector3(1, 0, 0); // Wind direction
     this.area = 100;            // Area over which snow falls
     this.height = 30;           // Height at which snow spawns
     
     // Particle system
     this.particles = null;
     this.particleSystem = null;
-    
-    // Wind animation
-    this.windTime = 0;
-    this.windChangeSpeed = 0.002;
     
     // Current snow intensity (0-1)
     this.intensity = 0.5;
@@ -32,11 +25,15 @@ export class SnowEffect {
    * Initialize the snow effect
    */
   init() {
+    console.log("Initializing snow effect...");
+    
     // Create snow particles
     this.createParticles();
     
     // Add to scene
     this.scene.add(this.particleSystem);
+    
+    console.log("Snow effect initialized");
   }
   
   /**
@@ -44,12 +41,8 @@ export class SnowEffect {
    */
   createParticles() {
     // Create particle geometry
-    const particleGeometry = new THREE.BufferGeometry();
-    
-    // Generate random positions for particles
     const positions = new Float32Array(this.particleCount * 3);
     const velocities = new Float32Array(this.particleCount * 3);
-    const sizes = new Float32Array(this.particleCount);
     
     for (let i = 0; i < this.particleCount; i++) {
       // Random positions within area
@@ -60,24 +53,22 @@ export class SnowEffect {
       
       // Random velocities
       velocities[i3] = (Math.random() - 0.5) * 0.1;
-      velocities[i3 + 1] = -0.1 - Math.random() * this.fallSpeed * 0.5;
+      velocities[i3 + 1] = -0.1 - Math.random() * 0.3;
       velocities[i3 + 2] = (Math.random() - 0.5) * 0.1;
-      
-      // Random sizes
-      sizes[i] = this.particleSize * (0.5 + Math.random() * 0.5);
     }
     
-    // Add attributes to geometry
-    particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    particleGeometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3));
-    particleGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     
-    // Create snow material with custom shader
-    const snowMaterial = new THREE.PointsMaterial({
+    // Store velocities in userData instead of as an attribute
+    this.velocities = velocities;
+    
+    // Create simple snowflake material
+    const material = new THREE.PointsMaterial({
       color: 0xffffff,
       size: this.particleSize,
       transparent: true,
-      opacity: 0.8,
+      opacity: 0.6,
       map: this.createSnowflakeTexture(),
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -85,8 +76,8 @@ export class SnowEffect {
     });
     
     // Create particle system
-    this.particleSystem = new THREE.Points(particleGeometry, snowMaterial);
-    this.particles = particleGeometry;
+    this.particleSystem = new THREE.Points(geometry, material);
+    this.particles = geometry;
   }
   
   /**
@@ -136,15 +127,8 @@ export class SnowEffect {
       this.particleSystem.visible = true;
     }
     
-    // Get particle attributes
+    // Simple snowfall animation
     const positions = this.particles.attributes.position.array;
-    const velocities = this.particles.attributes.velocity.array;
-    
-    // Update wind direction over time for natural variation
-    this.windTime += deltaTime * this.windChangeSpeed;
-    const windX = Math.sin(this.windTime) * this.windStrength;
-    const windZ = Math.cos(this.windTime * 0.7) * this.windStrength * 0.5;
-    this.windDirection.set(windX, 0, windZ);
     
     // Only update a proportion of particles based on intensity
     const updateCount = Math.floor(this.particleCount * this.intensity);
@@ -153,21 +137,16 @@ export class SnowEffect {
     for (let i = 0; i < updateCount; i++) {
       const i3 = i * 3;
       
-      // Apply velocity and wind
-      positions[i3] += velocities[i3] + this.windDirection.x * deltaTime;
-      positions[i3 + 1] += velocities[i3 + 1] * deltaTime;
-      positions[i3 + 2] += velocities[i3 + 2] + this.windDirection.z * deltaTime;
+      // Apply velocity and gravity
+      positions[i3] += this.velocities[i3] * deltaTime * 10;
+      positions[i3 + 1] += this.velocities[i3 + 1] * deltaTime * 10;
+      positions[i3 + 2] += this.velocities[i3 + 2] * deltaTime * 10;
       
       // If particle goes below ground, reset it at the top
-      if (positions[i3 + 1] < -2) {
+      if (positions[i3 + 1] < -5) {
         positions[i3] = (Math.random() - 0.5) * this.area;
         positions[i3 + 1] = this.height;
         positions[i3 + 2] = (Math.random() - 0.5) * this.area;
-        
-        // Reset velocity with slight variation
-        velocities[i3] = (Math.random() - 0.5) * 0.1;
-        velocities[i3 + 1] = -0.1 - Math.random() * this.fallSpeed * 0.5;
-        velocities[i3 + 2] = (Math.random() - 0.5) * 0.1;
       }
       
       // If particle goes outside area, wrap it to the other side
@@ -178,7 +157,7 @@ export class SnowEffect {
       if (positions[i3 + 2] > halfArea) positions[i3 + 2] = -halfArea;
     }
     
-    // Mark attributes for update
+    // Mark positions for update
     this.particles.attributes.position.needsUpdate = true;
   }
   
@@ -189,41 +168,11 @@ export class SnowEffect {
   setIntensity(intensity) {
     this.intensity = Math.max(0, Math.min(1, intensity));
     
-    // Update particle count
+    // Update particle opacity
     if (this.particleSystem) {
-      this.particleSystem.material.opacity = 0.7 * this.intensity;
+      this.particleSystem.material.opacity = 0.6 * this.intensity;
     }
     
     return this.intensity;
-  }
-  
-  /**
-   * Set wind properties
-   * @param {number} strength - Wind strength
-   * @param {THREE.Vector3} direction - Wind direction
-   */
-  setWind(strength, direction) {
-    this.windStrength = strength;
-    
-    if (direction) {
-      this.windDirection.copy(direction).normalize();
-    }
-  }
-  
-  /**
-   * Set the area where snow falls
-   * @param {number} area - Size of snow area
-   * @param {number} height - Height at which snow spawns
-   */
-  setArea(area, height) {
-    if (area) this.area = area;
-    if (height) this.height = height;
-    
-    // Re-create particles with new area
-    if (this.particleSystem) {
-      this.scene.remove(this.particleSystem);
-      this.createParticles();
-      this.scene.add(this.particleSystem);
-    }
   }
 } 

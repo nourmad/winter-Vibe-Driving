@@ -264,9 +264,20 @@ export class Vehicle {
     
     // Calculate speed (km/h)
     const velocity = this.chassisBody.velocity;
+    
+    // Get forward direction based on chassis orientation
+    const chassisQuat = this.chassisBody.quaternion;
     const forwardVelocity = new CANNON.Vec3(0, 0, -1);
-    forwardVelocity.applyQuaternion(this.chassisBody.quaternion);
-    const dotProduct = velocity.dot(forwardVelocity);
+    forwardVelocity.scale(-1, forwardVelocity); // Flip to match vehicle forward direction
+    
+    // Transform the forward vector using the chassis quaternion
+    chassisQuat.vmult(forwardVelocity, forwardVelocity);
+    
+    // Calculate dot product using the velocity components
+    const dotProduct = 
+      velocity.x * forwardVelocity.x + 
+      velocity.y * forwardVelocity.y + 
+      velocity.z * forwardVelocity.z;
     
     // Convert speed to km/h (Cannon.js uses m/s)
     this.speed = Math.abs(dotProduct) * 3.6;

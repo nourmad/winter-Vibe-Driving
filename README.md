@@ -1,59 +1,65 @@
 # Winter Driving Simulator
 
-A 3D driving simulator built with Three.js featuring realistic vehicle physics, animated steering wheel with hands, and a procedurally generated winter environment.
+A 3D driving simulator with winter environment using Three.js and Cannon.js physics.
 
 ## Features
 
-- Realistic vehicle physics using cannon-es
-- Detailed steering wheel with animated hands that follow your steering input
-- Procedurally generated winter terrain with snow, trees, and rocks
-- Dynamic snowfall with adjustable intensity
-- Multiple camera modes (first-person, third-person, and orbit)
-- Responsive controls for smooth driving experience
+- Drive a vehicle in a winter landscape
+- Physics-based driving mechanics
+- Snow effects
+- Camera modes (first and third person)
+- Snow intensity controls
 
-## Controls
+## Getting Started
 
-- **W / Up Arrow**: Accelerate
+### Prerequisites
+
+- Node.js (v14+ recommended)
+- npm
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+### Running the Application
+
+Start the development server:
+
+```bash
+npm start
+```
+
+The application will be available at http://localhost:1234 (or another port if 1234 is already in use).
+
+### Alternative Direct Version
+
+If you encounter any issues with the main application, you can use the standalone version by opening `direct.html` or `fix.html` directly in your browser. These versions don't require a build step and contain all the code in a single file.
+
+### Controls
+
+- **W / Up Arrow**: Accelerate forward
 - **S / Down Arrow**: Brake/Reverse
 - **A / Left Arrow**: Steer left
 - **D / Right Arrow**: Steer right
-- **Space**: Handbrake
-- **Shift**: Boost
-- **Camera Toggle Button**: Switch between camera views
+- **Toggle Camera Button**: Switch between first-person and third-person view
+- **Snow Intensity Slider**: Adjust the amount of snow in the scene
 
-## Installation
+## Troubleshooting
 
-1. Clone this repository
-2. Install dependencies:
-   ```
-   npm install
-   ```
-3. Start the development server:
-   ```
-   npm start
-   ```
-4. Open your browser and navigate to `http://localhost:1234`
+If you encounter any issues:
 
-## Requirements
-
-- Node.js 14+
-- Modern browser with WebGL support
+1. Make sure all dependencies are installed with `npm install`
+2. Try using the direct.html version as a fallback
+3. Check the browser console for any error messages
+4. Try refreshing the page or clicking the "Retry" button
 
 ## Technologies Used
 
-- Three.js for 3D rendering
-- cannon-es for physics simulation
-- Parcel for bundling and development server
-
-## Customization
-
-You can customize various aspects of the simulator by modifying the values in the respective classes:
-
-- `TerrainGenerator.js`: Adjust terrain size, detail, and snow properties
-- `SnowEffect.js`: Change snow intensity, particle count, and wind effects
-- `Vehicle.js`: Modify vehicle properties such as size, mass, and handling
-- `CameraManager.js`: Adjust camera positions and behavior
-
-## License
-
-MIT 
+- Three.js - 3D WebGL graphics
+- Cannon.js - Physics engine
+- Parcel - Bundler 
