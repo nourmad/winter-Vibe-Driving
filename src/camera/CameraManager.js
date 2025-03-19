@@ -278,16 +278,29 @@ export class CameraManager {
       // Add height
       behindPosition.y += this.thirdPersonHeight;
       
-      // Set camera position with smooth follow (but only after transition completed)
+      // Set camera position with smooth follow
       if (deltaTime > 0 && this.transitionProgress === 0) {
-        this.cameraPosition.lerp(behindPosition, 1 - Math.pow(this.thirdPersonLag, deltaTime));
+        // More responsive camera follow during steering (reduce lag)
+        // Extract steering value from vehicle if available
+        const steeringInput = Math.abs(this.vehicle.userData?.steeringInput || 0);
+        
+        // Reduce camera lag when steering (makes camera more responsive during turns)
+        const adjustedLag = steeringInput > 0.1 ? 
+          this.thirdPersonLag * 0.5 : // Reduce lag during steering
+          this.thirdPersonLag;        // Normal lag when going straight
+          
+        this.cameraPosition.lerp(behindPosition, 1 - Math.pow(adjustedLag, deltaTime));
       } else {
         // Direct positioning during/right after transition
         this.cameraPosition.copy(behindPosition);
       }
       
       // Look at vehicle with slight offset for better view
-      this.lookAt.copy(vehiclePosition).add(new THREE.Vector3(0, 1, 0));
+      // Use the vehicle's forward direction to look ahead of the vehicle slightly
+      const lookAtPosition = vehiclePosition.clone().add(
+        vehicleDirection.clone().multiplyScalar(2).add(new THREE.Vector3(0, 1, 0))
+      );
+      this.lookAt.copy(lookAtPosition);
       
     } else if (this.currentMode === this.ORBIT) {
       // Orbit mode - circle around the vehicle

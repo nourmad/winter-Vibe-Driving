@@ -532,9 +532,32 @@ export class Vehicle {
       this.steeringAngle = targetAngle;
     }
     
+    // Store steering input in userData for camera and other systems
+    if (this.chassis) {
+      if (!this.chassis.userData) this.chassis.userData = {};
+      this.chassis.userData.steeringInput = steeringInput;
+    }
+    
     // Apply steering to front wheels
     this.vehicle.setSteeringValue(this.steeringAngle, this.FRONT_LEFT);
     this.vehicle.setSteeringValue(this.steeringAngle, this.FRONT_RIGHT);
+    
+    // Apply rotational force to the chassis based on steering
+    if (Math.abs(this.steeringAngle) > 0.01) {
+      // Calculate rotation force based on steering angle and current speed
+      // Use a base rotation strength plus speed-dependent component
+      const baseRotationStrength = 0.5; // Minimum rotation strength even at standstill
+      const speedFactor = this.speed / 50;  // Speed-dependent component
+      const rotationStrength = this.steeringAngle * (baseRotationStrength + speedFactor);
+      
+      // Create a torque vector around the Y axis
+      // Higher multiplier for low speeds to ensure visual rotation
+      const torqueMultiplier = this.speed < 5 ? 150 : 100;
+      const torque = new CANNON.Vec3(0, rotationStrength * torqueMultiplier, 0);
+      
+      // Apply the torque to rotate the car
+      this.chassisBody.angularVelocity.vadd(torque.scale(deltaTime), this.chassisBody.angularVelocity);
+    }
     
     // Rotate the steering wheel visual
     if (this.steeringWheel) {
@@ -612,14 +635,14 @@ export class Vehicle {
       }
     }
     
-    // Apply forces to wheels
+    // Apply forces to wheels - BACK wheel drive with FRONT wheel steering
     for (let i = 0; i < 4; i++) {
-      // Make this all-wheel drive for better traction
+      // Apply engine force only to back wheels (rear wheel drive)
       if (i === this.BACK_LEFT || i === this.BACK_RIGHT) {
         this.vehicle.applyEngineForce(engineForce, i);
       } else {
-        // Front wheels also get power for better traction
-        this.vehicle.applyEngineForce(engineForce * 0.4, i);
+        // No engine force to front wheels, only steering (handled in updateSteering)
+        this.vehicle.applyEngineForce(0, i);
       }
       
       // Apply brakes to all wheels
