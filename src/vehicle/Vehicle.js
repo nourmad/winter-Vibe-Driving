@@ -91,8 +91,8 @@ export class Vehicle {
     this.chassisBody = new CANNON.Body({
       mass: this.mass,
       material: this.physics.tireMaterial,
-      linearDamping: 0.06,       // Increased damping for more stability
-      angularDamping: 0.1        // Increased to prevent flipping
+      linearDamping: 0.1,       // Increased damping for more stability
+      angularDamping: 0.4       // Increased to improve steering responsiveness
     });
     this.chassisBody.addShape(chassisShape);
     
@@ -100,7 +100,6 @@ export class Vehicle {
     this.chassisBody.position.copy(this.spawnPosition);
     
     // Set initial rotation to face along the road (z-axis)
-    // Important: Make sure physics body matches the visual orientation (0 instead of Math.PI)
     this.chassisBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), 0);
     
     // Add chassis to the physics world
@@ -109,54 +108,78 @@ export class Vehicle {
     // Create vehicle
     this.vehicle = this.physics.createVehicle(this.chassisBody);
     
-    // Configure suspension and wheel properties
-    const suspensionStiffness = 30;        // Increased for better road holding
-    const suspensionRestLength = 0.3;      // Reduced to keep car closer to ground
-    const suspensionDamping = 4.5;         // Increased for stability
-    const suspensionCompression = 4.5;     // Increased for stability
-    const rollInfluence = 0.005;           // Reduced to prevent tipping
+    // Configure suspension and wheel properties for better handling
+    const suspensionStiffness = 35;        // Higher value for more responsive steering
+    const suspensionRestLength = 0.3;      // Distance from chassis to wheel at rest
+    const suspensionDamping = 2.5;         // Damping prevents excessive bouncing
+    const suspensionCompression = 4.0;     // Higher value means firmer suspension
+    const rollInfluence = 0.01;            // Controls how much the car can roll during turns
     
-    const axleWidth = 1.7;
-    const wheelRadius = 0.33;
-    const wheelHalfWidth = 0.2;
+    // Vehicle dimensions
+    const axleWidth = 1.6;                 // Distance between left and right wheels
+    const wheelRadius = 0.33;              // Radius of each wheel
+    const wheelHalfWidth = 0.2;            // Half the width of each wheel
     
-    // Add wheels
+    // IMPORTANT: Define clear wheel positions with correct order:
+    // 0: Front Left, 1: Front Right, 2: Back Left, 3: Back Right
+    
+    // Define wheel connection points with clearer front/back separation
+    const frontZ = this.length / 2 - wheelRadius * 1.1;  // Front axle Z position (positive)
+    const backZ = -this.length / 2 + wheelRadius * 1.1;  // Back axle Z position (negative)
+    const leftX = -axleWidth / 2;                        // Left side X position
+    const rightX = axleWidth / 2;                        // Right side X position
+    const wheelY = 0;                                   // Wheel height (bottom of chassis)
+    
+    console.log(`Wheel positions: 
+      Front Left: (${leftX}, ${wheelY}, ${frontZ})
+      Front Right: (${rightX}, ${wheelY}, ${frontZ})
+      Back Left: (${leftX}, ${wheelY}, ${backZ})
+      Back Right: (${rightX}, ${wheelY}, ${backZ})`);
+    
+    // Wheel options configuration
     const wheelOptions = {
       radius: wheelRadius,
-      directionLocal: new CANNON.Vec3(0, -1, 0),
+      directionLocal: new CANNON.Vec3(0, -1, 0), // Points downward
       suspensionStiffness,
       suspensionRestLength,
       dampingRelaxation: suspensionDamping,
       dampingCompression: suspensionCompression,
       rollInfluence,
-      maxSuspensionForce: 100000,
-      customSlidingRotationalSpeed: -30,
-      useCustomSlidingRotationalSpeed: true
+      maxSuspensionForce: 50000,           // Maximum force the suspension can apply
+      maxSuspensionTravel: 0.3,            // How far the suspension can extend/compress
+      customSlidingRotationalSpeed: -30,    // How fast wheels spin when sliding/drifting
+      useCustomSlidingRotationalSpeed: true,
+      frictionSlip: 1.5                    // Higher value = more grip
     };
     
-    // Front left wheel
-    wheelOptions.chassisConnectionPointLocal = new CANNON.Vec3(-axleWidth / 2, 0, this.length / 2 - wheelRadius);
+    // Add wheels in specific order: FL, FR, BL, BR
+    
+    // Add front left wheel (index 0)
+    wheelOptions.chassisConnectionPointLocal = new CANNON.Vec3(leftX, wheelY, frontZ);
     this.vehicle.addWheel(wheelOptions);
     
-    // Front right wheel
-    wheelOptions.chassisConnectionPointLocal = new CANNON.Vec3(axleWidth / 2, 0, this.length / 2 - wheelRadius);
+    // Add front right wheel (index 1)
+    wheelOptions.chassisConnectionPointLocal = new CANNON.Vec3(rightX, wheelY, frontZ);
     this.vehicle.addWheel(wheelOptions);
     
-    // Back left wheel
-    wheelOptions.chassisConnectionPointLocal = new CANNON.Vec3(-axleWidth / 2, 0, -this.length / 2 + wheelRadius);
+    // Update wheel options for rear wheels - slightly different friction
+    wheelOptions.frictionSlip = 1.4;       // Slightly less grip for rear wheels
+    
+    // Add back left wheel (index 2)
+    wheelOptions.chassisConnectionPointLocal = new CANNON.Vec3(leftX, wheelY, backZ);
     this.vehicle.addWheel(wheelOptions);
     
-    // Back right wheel
-    wheelOptions.chassisConnectionPointLocal = new CANNON.Vec3(axleWidth / 2, 0, -this.length / 2 + wheelRadius);
+    // Add back right wheel (index 3)
+    wheelOptions.chassisConnectionPointLocal = new CANNON.Vec3(rightX, wheelY, backZ);
     this.vehicle.addWheel(wheelOptions);
     
-    // Create wheel bodies
+    // Create wheel bodies for physics simulation
     this.vehicle.wheelInfos.forEach((wheel, index) => {
       const wheelBody = new CANNON.Body({
         mass: 1,
         material: this.physics.tireMaterial,
         type: CANNON.Body.KINEMATIC,
-        collisionFilterGroup: 0, // turn off collisions
+        collisionFilterGroup: 0  // No collision with other objects
       });
       
       const wheelShape = new CANNON.Cylinder(
@@ -172,6 +195,14 @@ export class Vehicle {
       ));
       
       this.physics.addBody(wheelBody);
+    });
+    
+    // After creating the wheels, log their indices and positions for debugging
+    console.log("Wheel indices:", {
+      "Front Left": 0,
+      "Front Right": 1,
+      "Back Left": 2,
+      "Back Right": 3
     });
   }
   
@@ -520,15 +551,24 @@ export class Vehicle {
    * @param {number} deltaTime - Time since last update
    */
   updateSteering(steeringInput, deltaTime) {
-    // Calculate target steering angle
+    // Clamp steering input to ensure it's in the valid range
+    steeringInput = Math.max(-1, Math.min(1, steeringInput));
+    
+    // Calculate the target steering angle (in radians)
+    // Maximum angle is 45 degrees (PI/4) when steering input is at maximum
     const targetAngle = -steeringInput * this.maxSteeringAngle;
     
-    // Smooth steering transitions
-    const steeringSpeed = 3.0; // How quickly steering responds
+    // Smoothly interpolate toward the target angle for more natural steering response
+    // Higher speeds should have reduced steering angle for stability
+    const speedFactor = Math.max(0, 1 - (this.speed / 200)); // Reduces steering angle at high speeds
+    const steeringSpeed = 5.0 * speedFactor; // How quickly steering responds
     
+    // Apply smooth transition to the steering angle
     if (Math.abs(targetAngle - this.steeringAngle) > 0.001) {
-      this.steeringAngle += (targetAngle - this.steeringAngle) * steeringSpeed * deltaTime;
+      // Move current angle toward target angle at a rate proportional to deltaTime
+      this.steeringAngle += (targetAngle - this.steeringAngle) * Math.min(steeringSpeed * deltaTime, 1);
     } else {
+      // Snap to exact target if we're very close
       this.steeringAngle = targetAngle;
     }
     
@@ -538,32 +578,19 @@ export class Vehicle {
       this.chassis.userData.steeringInput = steeringInput;
     }
     
-    // Apply steering to front wheels
-    this.vehicle.setSteeringValue(this.steeringAngle, this.FRONT_LEFT);
-    this.vehicle.setSteeringValue(this.steeringAngle, this.FRONT_RIGHT);
+    // IMPORTANT: Ensure only the front wheels steer by explicitly setting the wheel indices
+    // Front wheels steer
+    this.vehicle.setSteeringValue(this.steeringAngle, 0); // Front left
+    this.vehicle.setSteeringValue(this.steeringAngle, 1); // Front right
     
-    // Apply rotational force to the chassis based on steering
-    if (Math.abs(this.steeringAngle) > 0.01) {
-      // Calculate rotation force based on steering angle and current speed
-      // Use a base rotation strength plus speed-dependent component
-      const baseRotationStrength = 0.5; // Minimum rotation strength even at standstill
-      const speedFactor = this.speed / 50;  // Speed-dependent component
-      const rotationStrength = this.steeringAngle * (baseRotationStrength + speedFactor);
-      
-      // Create a torque vector around the Y axis
-      // Higher multiplier for low speeds to ensure visual rotation
-      const torqueMultiplier = this.speed < 5 ? 150 : 100;
-      const torque = new CANNON.Vec3(0, rotationStrength * torqueMultiplier, 0);
-      
-      // Apply the torque to rotate the car
-      this.chassisBody.angularVelocity.vadd(torque.scale(deltaTime), this.chassisBody.angularVelocity);
-    }
+    // Back wheels remain straight (no steering) - enforcing this explicitly
+    this.vehicle.setSteeringValue(0, 2); // Back left
+    this.vehicle.setSteeringValue(0, 3); // Back right
     
-    // Rotate the steering wheel visual
+    // Rotate the steering wheel visual to match the steering angle
+    // Apply more rotation to the visual wheel for better feedback (2.5x multiplier)
     if (this.steeringWheel) {
-      // Map steering angle to steering wheel rotation
-      // Typically steering wheels rotate more than the actual wheel angle
-      this.steeringWheel.rotation.y = -this.steeringAngle * 2;
+      this.steeringWheel.rotation.y = -this.steeringAngle * 2.5;
     }
   }
   
@@ -579,18 +606,13 @@ export class Vehicle {
     let engineForce = 0;
     let brakeForce = 0;
     
-    // Less aggressive throttle smoothing
-    const smoothThrottle = Math.min(throttle * Math.min(1, this.speed/3 + 0.5), 1);
-    
-    // Debug speed info
-    console.log(`Speed: ${this.speed.toFixed(2)} km/h, Reverse: ${reverse}`);
-    
-    // Calculate actual direction - positive = forward, negative = backward
+    // Get chassis velocity and determine direction
     const velocity = this.chassisBody.velocity;
     const chassisQuat = this.chassisBody.quaternion;
     const forwardDir = new CANNON.Vec3(0, 0, -1);
     chassisQuat.vmult(forwardDir, forwardDir);
     
+    // Calculate velocity in the forward direction
     const velInForwardDir = 
       velocity.x * forwardDir.x + 
       velocity.y * forwardDir.y + 
@@ -600,48 +622,56 @@ export class Vehicle {
     const isMovingForward = velInForwardDir < 0; // Car faces -Z direction
     const actualSpeed = Math.abs(velInForwardDir) * 3.6; // km/h
     
-    console.log(`Moving forward: ${isMovingForward}, Actual speed: ${actualSpeed.toFixed(2)}`);
+    // Log current speed (in km/h)
+    console.log(`Speed: ${this.speed.toFixed(2)} km/h, Direction: ${isMovingForward ? 'forward' : 'reverse'}`);
     
-    // Reverse logic with higher max speed
+    // Maximum speeds for forward and reverse
+    const MAX_FORWARD_SPEED = 120; // km/h
+    const MAX_REVERSE_SPEED = 30;  // km/h
+    
+    // Handle reverse
     if (reverse) {
-      // Apply stronger brakes when going forward
-      if (isMovingForward && actualSpeed > 5) {
-        brakeForce = this.maxBrakeForce * 1.5; // Even stronger braking when trying to reverse
+      // Apply brakes when going forward and trying to reverse
+      if (isMovingForward && actualSpeed > 1) {
+        brakeForce = this.maxBrakeForce * 1.5;
         engineForce = 0;
-      }
-      // Start reversing immediately when slow enough
+      } 
+      // Apply reverse force once we've slowed down enough
       else {
-        // Much stronger reverse force - increased to allow up to 30 km/h reverse speed
-        engineForce = -smoothThrottle * this.maxForce * 5.0;
+        engineForce = -this.maxForce * 0.5; // Less force for reverse
         
-        // Limit reverse speed to 30 km/h (actual speed is in reverse so it's negative)
-        if (!isMovingForward && actualSpeed > 30) {
+        // Limit reverse speed
+        if (!isMovingForward && actualSpeed > MAX_REVERSE_SPEED) {
           engineForce = 0;
         }
-        
-        brakeForce = 0;
       }
-    } 
-    else if (!reverse) {
-      // Forward
-      engineForce = smoothThrottle * this.maxForce;
+    }
+    // Handle forward driving
+    else {
+      // Apply engine force for acceleration
+      engineForce = throttle * this.maxForce;
       
-      // Apply stronger brakes when brake is pressed
-      brakeForce = brake * this.maxBrakeForce * 1.5;
+      // Apply brakes when brake is pressed
+      brakeForce = brake * this.maxBrakeForce;
       
       // Apply boost if requested
-      if (boost) {
-        engineForce *= 1.5;
+      if (boost && throttle > 0.1) {
+        engineForce *= 1.3;
+      }
+      
+      // Limit top speed
+      if (isMovingForward && actualSpeed > MAX_FORWARD_SPEED) {
+        engineForce = 0;
       }
     }
     
-    // Apply forces to wheels - BACK wheel drive with FRONT wheel steering
+    // Apply engine force to all wheels with front-wheel drive bias
     for (let i = 0; i < 4; i++) {
-      // Apply engine force only to back wheels (rear wheel drive)
-      if (i === this.BACK_LEFT || i === this.BACK_RIGHT) {
+      if (i === this.FRONT_LEFT || i === this.FRONT_RIGHT) {
+        // Apply full engine force to front wheels (front-wheel drive)
         this.vehicle.applyEngineForce(engineForce, i);
       } else {
-        // No engine force to front wheels, only steering (handled in updateSteering)
+        // Apply no engine force to rear wheels in normal operation
         this.vehicle.applyEngineForce(0, i);
       }
       
@@ -649,23 +679,14 @@ export class Vehicle {
       this.vehicle.setBrake(brakeForce, i);
     }
     
-    // Apply initial impulse to help start moving from standstill
-    if ((throttle > 0.1 || reverse) && actualSpeed < 2) {
-      // Apply stronger impulse in reverse
-      const impulseStrength = reverse ? 1000 : -300;
-      const impulse = new CANNON.Vec3(0, 0, impulseStrength);
-      const worldImpulse = new CANNON.Vec3();
-      this.chassisBody.quaternion.vmult(impulse, worldImpulse);
-      this.chassisBody.applyImpulse(worldImpulse, this.chassisBody.position);
-    }
-    
     // Apply downforce to keep car grounded as speed increases
+    // This prevents the car from becoming unstable or flying at high speeds
     if (this.speed > 10) {
-      const downforce = new CANNON.Vec3(0, -this.speed * 10, 0);
+      const downforce = new CANNON.Vec3(0, -this.speed * 8, 0);
       this.chassisBody.applyLocalForce(downforce, new CANNON.Vec3(0, 0, 0));
     }
     
-    // Simple anti-roll stabilization - counteract extreme tilting
+    // Apply anti-roll force to prevent tipping during sharp turns
     const rotation = new CANNON.Quaternion();
     this.chassisBody.quaternion.copy(rotation);
     
@@ -677,15 +698,13 @@ export class Vehicle {
     const worldUp = new CANNON.Vec3(0, 1, 0);
     const tiltAngle = Math.acos(vehicleUp.dot(worldUp));
     
-    // If tilt is too extreme, apply a counter-torque to prevent flipping
-    if (tiltAngle > Math.PI / 4) { // 45 degrees
-      // Calculate axis of rotation (perpendicular to tilt plane)
+    // Apply counter-torque if tilt is too extreme (prevents flipping)
+    if (tiltAngle > Math.PI / 6) { // 30 degrees
       const correctionAxis = new CANNON.Vec3();
       vehicleUp.cross(worldUp, correctionAxis);
       correctionAxis.normalize();
       
-      // Apply stronger counter-torque as tilt increases
-      const correctionStrength = 5000 * (tiltAngle - Math.PI/4);
+      const correctionStrength = 3000 * (tiltAngle - Math.PI/6);
       const correctionTorque = correctionAxis.scale(correctionStrength);
       
       this.chassisBody.torque.vadd(correctionTorque, this.chassisBody.torque);
@@ -697,14 +716,23 @@ export class Vehicle {
    */
   updateWheelPositions() {
     // Update wheel positions from physics
-    for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
+    for (let i = 0; i < this.vehicle.wheelInfos.length && i < this.wheels.length; i++) {
       this.vehicle.updateWheelTransform(i);
       const wheelInfo = this.vehicle.wheelInfos[i];
       const wheelMesh = this.wheels[i];
       
       if (wheelMesh) {
+        // Get the world position and rotation from the wheel physics
         wheelMesh.position.copy(wheelInfo.worldTransform.position);
         wheelMesh.quaternion.copy(wheelInfo.worldTransform.quaternion);
+        
+        // Debug wheel positions to ensure front/back alignment is correct
+        const wheelType = i < 2 ? "Front" : "Back";
+        const wheelSide = i % 2 === 0 ? "Left" : "Right";
+        // Log wheel position every 100 frames to avoid spamming console
+        if (Math.random() < 0.01) {
+          console.log(`${wheelType} ${wheelSide} wheel position:`, wheelMesh.position);
+        }
       }
     }
   }
@@ -713,18 +741,25 @@ export class Vehicle {
    * Update chassis position and rotation from physics
    */
   updateChassisFromPhysics() {
-    // Update chassis position from physics
+    // Update chassis position directly from physics
     this.chassis.position.copy(this.chassisBody.position);
     
-    // Copy quaternion but apply a 180-degree correction around Y-axis to match physics
-    // This fixes the inconsistency between visual model and physics orientation
+    // Get correct quaternion for visual orientation
+    // The physics model and visual model need to be aligned
     const correctedQuaternion = this.chassisBody.quaternion.clone();
-    // Apply correction rotation of 180 degrees around Y axis
+    
+    // Apply 180-degree Y-axis correction to match the model orientation with physics
     const correctionQuat = new CANNON.Quaternion();
     correctionQuat.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), Math.PI);
     correctedQuaternion.mult(correctionQuat, correctedQuaternion);
     
+    // Apply the rotation to the chassis mesh
     this.chassis.quaternion.copy(correctedQuaternion);
+    
+    // Store forward direction for camera system
+    const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(this.chassis.quaternion);
+    if (!this.chassis.userData) this.chassis.userData = {};
+    this.chassis.userData.forwardDirection = forwardDir;
   }
   
   /**
@@ -757,11 +792,46 @@ export class Vehicle {
     // Create a copy to avoid modifying the original array
     const wheelsCopy = [...wheels];
     
+    // If we have exactly 4 wheels, force sorting by position
+    if (wheels.length === 4) {
+      console.log("Sorting 4 wheels by position to ensure correct front/back order");
+      
+      // Sort by Z position (front to back)
+      const sortedByZ = [...wheelsCopy].sort((a, b) => a.position.z - b.position.z);
+      
+      // Front two wheels (smaller Z value - front of car)
+      const frontWheels = sortedByZ.slice(0, 2);
+      // Back two wheels (larger Z value - back of car)
+      const backWheels = sortedByZ.slice(2, 4);
+      
+      // Sort front wheels by X (left to right)
+      frontWheels.sort((a, b) => a.position.x - b.position.x);
+      // Sort back wheels by X (left to right)
+      backWheels.sort((a, b) => a.position.x - b.position.x);
+      
+      // Combine in proper order: FL, FR, BL, BR
+      const properlyOrdered = [
+        frontWheels[0], // Front Left
+        frontWheels[1], // Front Right
+        backWheels[0],  // Back Left
+        backWheels[1]   // Back Right
+      ];
+      
+      console.log("Wheel order ensured by position:", 
+        properlyOrdered.map((w, i) => 
+          `Wheel ${i}: ${i < 2 ? 'Front' : 'Back'} ${i % 2 === 0 ? 'Left' : 'Right'}`
+        )
+      );
+      
+      return properlyOrdered;
+    }
+    
+    // Fallback to original method if not exactly 4 wheels
     // Define helper function to check if a name contains front/rear and left/right indicators
     const getWheelPosition = (name) => {
       name = name.toLowerCase();
-      const isFront = name.includes('front') || name.includes('f') || name.includes('fr');
-      const isRear = name.includes('rear') || name.includes('back') || name.includes('r') || name.includes('rr');
+      const isFront = name.includes('front') || name.includes('f');
+      const isRear = name.includes('rear') || name.includes('back') || name.includes('r');
       const isLeft = name.includes('left') || name.includes('l');
       const isRight = name.includes('right') || name.includes('r');
       
@@ -790,35 +860,8 @@ export class Vehicle {
     
     // If we couldn't sort all wheels by name, sort the remaining by position
     if (wheelsCopy.length > 0) {
-      // Sort by X position (left to right)
-      wheelsCopy.sort((a, b) => a.position.x - b.position.x);
-      
-      // If we have 4 wheels total, try to sort by position
-      if (wheels.length === 4) {
-        // Find which ones are front vs rear by Z position
-        wheelsCopy.sort((a, b) => a.position.z - b.position.z);
-        const frontWheels = wheelsCopy.slice(0, 2);
-        const rearWheels = wheelsCopy.slice(2, 4);
-        
-        // Sort front wheels by X (left to right)
-        frontWheels.sort((a, b) => a.position.x - b.position.x);
-        // Sort rear wheels by X (left to right)
-        rearWheels.sort((a, b) => a.position.x - b.position.x);
-        
-        // Add any remaining wheels in the correct order
-        if (sortedWheels.length === 0) {
-          sortedWheels.push(frontWheels[0]); // FL
-          sortedWheels.push(frontWheels[1]); // FR
-          sortedWheels.push(rearWheels[0]);  // BL
-          sortedWheels.push(rearWheels[1]);  // BR
-        } else {
-          // Add remaining wheels
-          sortedWheels.push(...wheelsCopy);
-        }
-      } else {
-        // If we don't have exactly 4 wheels, just add the remaining ones
-        sortedWheels.push(...wheelsCopy);
-      }
+      // If we don't have exactly 4 wheels, just add the remaining ones
+      sortedWheels.push(...wheelsCopy);
     }
     
     console.log("Sorted wheels:", sortedWheels.map(w => w.name));

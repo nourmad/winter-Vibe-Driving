@@ -267,41 +267,64 @@ export class CameraManager {
     } else if (this.currentMode === this.THIRD_PERSON) {
       // Third person mode - following behind the vehicle
       
-      // Get the vehicle's direction vector (pointing forward along the vehicle's z-axis)
-      const vehicleDirection = new THREE.Vector3(0, 0, 1).applyQuaternion(this.vehicle.quaternion);
+      // Get the vehicle's direction vector from userData if available, or calculate it
+      let vehicleDirection;
+      if (this.vehicle.userData?.forwardDirection) {
+        vehicleDirection = this.vehicle.userData.forwardDirection.clone();
+      } else {
+        vehicleDirection = new THREE.Vector3(0, 0, 1).applyQuaternion(this.vehicle.quaternion);
+      }
       
-      // Calculate position behind the vehicle by using negative direction vector
-      const behindPosition = vehiclePosition.clone().add(
-        vehicleDirection.clone().multiplyScalar(-this.thirdPersonDistance)
+      // Get steering input for more responsive camera follow
+      const steeringInput = this.vehicle.userData?.steeringInput || 0;
+      
+      // Add slight offset based on steering to create a more dynamic follow
+      const steeringOffset = new THREE.Vector3(
+        steeringInput * 0.5, // Move camera slightly to the side during turns
+        0,
+        0
       );
+      
+      // Calculate position behind the vehicle with steering offset
+      const behindPosition = vehiclePosition.clone()
+        .add(vehicleDirection.clone().multiplyScalar(-this.thirdPersonDistance))
+        .add(steeringOffset);
       
       // Add height
       behindPosition.y += this.thirdPersonHeight;
       
-      // Set camera position with smooth follow
+      // Set camera position with smooth follow, but more responsive during steering
       if (deltaTime > 0 && this.transitionProgress === 0) {
-        // More responsive camera follow during steering (reduce lag)
-        // Extract steering value from vehicle if available
-        const steeringInput = Math.abs(this.vehicle.userData?.steeringInput || 0);
+        // More responsive camera follow during steering by reducing lag
+        const steeringMagnitude = Math.abs(steeringInput);
         
-        // Reduce camera lag when steering (makes camera more responsive during turns)
-        const adjustedLag = steeringInput > 0.1 ? 
-          this.thirdPersonLag * 0.5 : // Reduce lag during steering
-          this.thirdPersonLag;        // Normal lag when going straight
-          
+        // Progressively reduce lag as steering increases (makes camera more responsive in turns)
+        const adjustedLag = Math.max(
+          this.thirdPersonLag * (1 - steeringMagnitude * 0.7), // Reduce lag up to 70% during full steering
+          0.01 // Minimum lag to prevent jerky movement
+        );
+        
+        // Apply smoothing with variable lag based on steering
         this.cameraPosition.lerp(behindPosition, 1 - Math.pow(adjustedLag, deltaTime));
       } else {
         // Direct positioning during/right after transition
         this.cameraPosition.copy(behindPosition);
       }
       
-      // Look at vehicle with slight offset for better view
-      // Use the vehicle's forward direction to look ahead of the vehicle slightly
-      const lookAtPosition = vehiclePosition.clone().add(
-        vehicleDirection.clone().multiplyScalar(2).add(new THREE.Vector3(0, 1, 0))
+      // Look at vehicle with better steering compensation 
+      // Calculate look target with slight steering bias for better curve following
+      const lookAtOffset = new THREE.Vector3(
+        steeringInput * 1.0, // Look more into the turn
+        0.5,                 // Look slightly up
+        0
       );
-      this.lookAt.copy(lookAtPosition);
       
+      // Get adjusted look position that better follows the curve of the turn
+      const lookAtPosition = vehiclePosition.clone()
+        .add(vehicleDirection.clone().multiplyScalar(3)) // Look ahead of the vehicle
+        .add(lookAtOffset); // Add steering-based offset
+      
+      this.lookAt.copy(lookAtPosition);
     } else if (this.currentMode === this.ORBIT) {
       // Orbit mode - circle around the vehicle
       const time = performance.now() * 0.001;
