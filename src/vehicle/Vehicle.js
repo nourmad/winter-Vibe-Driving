@@ -31,13 +31,19 @@ export class Vehicle {
     this.spawnPosition = new CANNON.Vec3(0, 0, 0); // Default position
     
     // Engine properties
-    this.maxForce = 3000;       // Reduced from 8000 to prevent flipping
+    this.maxForce = 4000;       // Increased from 3000 to 4000 for faster acceleration
     this.maxBrakeForce = 500;   // Increased from 100 to 500 for stronger braking
     this.maxSteeringAngle = Math.PI / 4; // 45 degrees
+    this.steeringCorrection = 0.025;     // Increased from 0.01 to 0.025 for stronger correction
     
     // Current vehicle state
     this.speed = 0;             // Current speed in km/h
     this.steeringAngle = 0;     // Current steering angle
+    
+    // Speed logging control
+    this.lastLogTime = 0;       // Last time speed was logged
+    this.logInterval = 200;     // Log interval in ms (200ms = 5 times per second)
+    this.lastLoggedSpeed = 0;   // Track last logged speed to avoid duplicate logs
     
     // Wheel indices
     this.FRONT_LEFT = 0;
@@ -554,6 +560,13 @@ export class Vehicle {
     // Clamp steering input to ensure it's in the valid range
     steeringInput = Math.max(-1, Math.min(1, steeringInput));
     
+    // Apply steering correction to counteract leftward drift when driving straight
+    // Apply more correction at higher speeds where drift is more noticeable
+    const driftCorrectionFactor = Math.min(1, this.speed / 50); // Gets stronger as speed increases up to 50 km/h
+    if (Math.abs(steeringInput) < 0.1) {
+      steeringInput += this.steeringCorrection * (1 + driftCorrectionFactor);
+    }
+    
     // Calculate the target steering angle (in radians)
     // Maximum angle is 45 degrees (PI/4) when steering input is at maximum
     const targetAngle = -steeringInput * this.maxSteeringAngle;
@@ -622,11 +635,18 @@ export class Vehicle {
     const isMovingForward = velInForwardDir < 0; // Car faces -Z direction
     const actualSpeed = Math.abs(velInForwardDir) * 3.6; // km/h
     
-    // Log current speed (in km/h)
-    console.log(`Speed: ${this.speed.toFixed(2)} km/h, Direction: ${isMovingForward ? 'forward' : 'reverse'}`);
+    // Throttle speed logging to 5 times per second and only log when speed changes
+    const currentTime = Date.now();
+    const roundedSpeed = Math.round(this.speed); // Round to whole number
+    if (currentTime - this.lastLogTime >= this.logInterval && 
+        Math.abs(roundedSpeed - this.lastLoggedSpeed) >= 1) {
+      console.log(`Speed: ${roundedSpeed} km/h, Direction: ${isMovingForward ? 'forward' : 'reverse'}`);
+      this.lastLogTime = currentTime;
+      this.lastLoggedSpeed = roundedSpeed;
+    }
     
     // Maximum speeds for forward and reverse
-    const MAX_FORWARD_SPEED = 120; // km/h
+    const MAX_FORWARD_SPEED = 140; // km/h (increased from 120 to 140)
     const MAX_REVERSE_SPEED = 30;  // km/h
     
     // Handle reverse
