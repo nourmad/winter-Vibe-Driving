@@ -17,9 +17,10 @@ export class Physics {
     // Set gravity for a realistic world
     this.world.gravity.set(0, -9.82, 0);
     
-    // Configure solver
-    this.world.solver.iterations = 20;
-    this.world.defaultContactMaterial.friction = 0.05;
+    // Configure solver with better settings for vehicle physics
+    this.world.solver.iterations = 30; // Increased from 20 for more accurate physics
+    this.world.broadphase = new CANNON.SAPBroadphase(this.world); // Use Sweep-and-Prune for better performance
+    this.world.defaultContactMaterial.friction = 0.2; // Increased from 0.05 for better traction
     
     // Create material for snow/ice surfaces
     this.snowMaterial = new CANNON.Material('snow');
@@ -30,7 +31,7 @@ export class Physics {
       this.snowMaterial,
       this.tireMaterial,
       {
-        friction: 0.15,          // Low friction for slippery snow
+        friction: 0.3,          // Increased from 0.15 for better traction
         restitution: 0.1,        // Low bounce
         contactEquationStiffness: 1000,
         contactEquationRelaxation: 3

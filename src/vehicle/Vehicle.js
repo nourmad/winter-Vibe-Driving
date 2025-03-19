@@ -31,8 +31,8 @@ export class Vehicle {
     this.spawnPosition = new CANNON.Vec3(0, 0, 0); // Default position
     
     // Engine properties
-    this.maxForce = 1000;
-    this.maxBrakeForce = 50;
+    this.maxForce = 3000;       // Reduced from 8000 to prevent flipping
+    this.maxBrakeForce = 100;
     this.maxSteeringAngle = Math.PI / 4; // 45 degrees
     
     // Current vehicle state
@@ -57,13 +57,11 @@ export class Vehicle {
   async init(terrain) {
     // Set spawn position on the road
     if (terrain) {
-      // Get road height from terrain and add a larger buffer to ensure it spawns fully above the road
-      // Increase from 0.35 to 1.0 to ensure car is well above the road
-      const roadHeight = terrain.getRoadHeight() + 1.0;
+      // Get road height from terrain and add a larger buffer to ensure it spawns above the road
+      const roadHeight = terrain.getRoadHeight() + 1.0; // Increased from 0.6 to 1.0
       
       // Position vehicle on the road, away from edges
-      // Add Z offset (25) to place car at the first quarter of the road
-      this.spawnPosition = new CANNON.Vec3(0, roadHeight, 25);
+      this.spawnPosition = new CANNON.Vec3(0, roadHeight, 50);
     }
     
     // Create physics chassis and vehicle
@@ -93,8 +91,8 @@ export class Vehicle {
     this.chassisBody = new CANNON.Body({
       mass: this.mass,
       material: this.physics.tireMaterial,
-      linearDamping: 0.1,       // Add damping to prevent excessive bouncing
-      angularDamping: 0.1       // Prevent excessive rotation
+      linearDamping: 0.06,       // Increased damping for more stability
+      angularDamping: 0.1        // Increased to prevent flipping
     });
     this.chassisBody.addShape(chassisShape);
     
@@ -111,11 +109,11 @@ export class Vehicle {
     this.vehicle = this.physics.createVehicle(this.chassisBody);
     
     // Configure suspension and wheel properties
-    const suspensionStiffness = 35;        // Increased from 30
-    const suspensionRestLength = 0.4;      // Increased from 0.3
-    const suspensionDamping = 4.4;
-    const suspensionCompression = 4.4;
-    const rollInfluence = 0.01;
+    const suspensionStiffness = 30;        // Increased for better road holding
+    const suspensionRestLength = 0.3;      // Reduced to keep car closer to ground
+    const suspensionDamping = 4.5;         // Increased for stability
+    const suspensionCompression = 4.5;     // Increased for stability
+    const rollInfluence = 0.005;           // Reduced to prevent tipping
     
     const axleWidth = 1.7;
     const wheelRadius = 0.33;
@@ -350,16 +348,16 @@ export class Vehicle {
     let engineForce = 0;
     let brakeForce = 0;
     
-    // Log inputs for debugging
-    console.log('Inputs:', { throttle, brake, reverse, boost });
+    // Less aggressive throttle smoothing
+    const smoothThrottle = Math.min(throttle * Math.min(1, this.speed/3 + 0.5), 1);
     
     // Apply engine force based on throttle and direction
-    if (reverse && this.speed < 5) {
+    if (reverse && this.speed < 30) {
       // Reverse
-      engineForce = -throttle * this.maxForce * 0.7; // Less force for reverse
+      engineForce = -smoothThrottle * this.maxForce * 0.7;
     } else if (!reverse) {
       // Forward
-      engineForce = throttle * this.maxForce;
+      engineForce = smoothThrottle * this.maxForce;
       
       // Apply boost if requested
       if (boost) {
@@ -370,21 +368,58 @@ export class Vehicle {
     // Apply brake force
     brakeForce = brake * this.maxBrakeForce;
     
-    // Log forces for debugging
-    console.log('Forces:', { engineForce, brakeForce });
-    
     // Apply forces to wheels
     for (let i = 0; i < 4; i++) {
-      // Applying more force to rear wheels for rear-wheel drive
+      // Make this all-wheel drive for better traction
       if (i === this.BACK_LEFT || i === this.BACK_RIGHT) {
         this.vehicle.applyEngineForce(engineForce, i);
       } else {
-        // Front wheels get less engine force for a more realistic feel
-        this.vehicle.applyEngineForce(engineForce * 0.1, i);
+        // Front wheels also get power for better traction
+        this.vehicle.applyEngineForce(engineForce * 0.4, i);
       }
       
       // Apply brakes to all wheels
       this.vehicle.setBrake(brakeForce, i);
+    }
+    
+    // Apply a stronger impulse to help overcome initial friction
+    if (throttle > 0.1 && this.speed < 3) {
+      const impulse = new CANNON.Vec3(0, 0, reverse ? 200 : -200);
+      const worldImpulse = new CANNON.Vec3();
+      this.chassisBody.quaternion.vmult(impulse, worldImpulse);
+      this.chassisBody.applyImpulse(worldImpulse, this.chassisBody.position);
+    }
+    
+    // Apply downforce to keep car grounded as speed increases
+    if (this.speed > 10) {
+      const downforce = new CANNON.Vec3(0, -this.speed * 10, 0);
+      this.chassisBody.applyLocalForce(downforce, new CANNON.Vec3(0, 0, 0));
+    }
+    
+    // Simple anti-roll stabilization - counteract extreme tilting
+    const rotation = new CANNON.Quaternion();
+    this.chassisBody.quaternion.copy(rotation);
+    
+    // Get the vehicle's up vector (Y-axis)
+    const vehicleUp = new CANNON.Vec3(0, 1, 0);
+    rotation.vmult(vehicleUp, vehicleUp);
+    
+    // Calculate the tilt angle (angle between vehicle's up vector and world up)
+    const worldUp = new CANNON.Vec3(0, 1, 0);
+    const tiltAngle = Math.acos(vehicleUp.dot(worldUp));
+    
+    // If tilt is too extreme, apply a counter-torque to prevent flipping
+    if (tiltAngle > Math.PI / 4) { // 45 degrees
+      // Calculate axis of rotation (perpendicular to tilt plane)
+      const correctionAxis = new CANNON.Vec3();
+      vehicleUp.cross(worldUp, correctionAxis);
+      correctionAxis.normalize();
+      
+      // Apply stronger counter-torque as tilt increases
+      const correctionStrength = 5000 * (tiltAngle - Math.PI/4);
+      const correctionTorque = correctionAxis.scale(correctionStrength);
+      
+      this.chassisBody.torque.vadd(correctionTorque, this.chassisBody.torque);
     }
   }
   

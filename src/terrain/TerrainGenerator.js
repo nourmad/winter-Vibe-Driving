@@ -26,12 +26,12 @@ export class TerrainGenerator {
     this.physics = physics;
     
     // Terrain settings
-    this.size = 100;           // Size of the terrain
-    this.resolution = 64;      // Resolution of the heightmap (reduced for performance)
+    this.size = 200;           // Doubled terrain size from 100 to 200
+    this.resolution = 128;     // Doubled resolution to match larger terrain
     this.maxHeight = 6;        // Maximum terrain height
     
     // Road settings
-    this.roadWidth = this.resolution / 5;  // Make road wider (was /10)
+    this.roadWidth = this.resolution / 5;  // Make road wider
     this.roadY = this.resolution / 2;      // Road position in the middle
     this.roadHeight = 0.5;                 // Fixed road height
     
@@ -250,10 +250,70 @@ export class TerrainGenerator {
     roadBody.addShape(roadShape);
     
     // Position the road at the same place as the visual road
-    roadBody.position.set(0, this.roadHeight, 0);
+    roadBody.position.set(0, this.roadHeight - 0.05, 0); // Lower slightly to ensure good contact
+    
+    // Create a special road material with better friction
+    const roadMaterial = new CANNON.Material('road');
+    roadBody.material = roadMaterial;
+    
+    // Create contact between road and tires
+    const roadTireContactMaterial = new CANNON.ContactMaterial(
+      roadMaterial,
+      this.physics.tireMaterial,
+      {
+        friction: 1.2,             // Increased from 0.8 for more grip
+        restitution: 0.01,         // Almost no bounce
+        contactEquationStiffness: 1500, // Increased for better road contact
+        contactEquationRelaxation: 4,
+        frictionEquationStiffness: 1000 // Added to improve traction
+      }
+    );
+    
+    // Add the contact material to the world
+    this.physics.world.addContactMaterial(roadTireContactMaterial);
+    
+    // Set collision groups
+    roadBody.collisionFilterGroup = 1;
+    roadBody.collisionFilterMask = 1;
     
     // Add body to physics world
     this.physics.addBody(roadBody);
+    
+    // Create a duplicate road ahead
+    this.createExtendedRoadPhysics(roadMaterial);
+  }
+  
+  /**
+   * Create an extended road section ahead of the main road
+   * @param {CANNON.Material} roadMaterial - Road material to use
+   */
+  createExtendedRoadPhysics(roadMaterial) {
+    // Road dimensions for extended section
+    const roadLength = this.size;
+    const roadWidth = (this.roadWidth * 2) * (this.size / this.resolution);
+    
+    // Create a box shape for the extended road
+    const extRoadShape = new CANNON.Box(new CANNON.Vec3(
+      roadWidth / 2,    // half width 
+      0.1,              // half height (thickness)
+      roadLength / 2    // half length
+    ));
+    
+    // Create extended road body
+    const extRoadBody = new CANNON.Body({
+      mass: 0,  // Static body
+      material: roadMaterial,
+      type: CANNON.Body.STATIC
+    });
+    
+    // Add shape to body
+    extRoadBody.addShape(extRoadShape);
+    
+    // Position the extended road in front of the main road
+    extRoadBody.position.set(0, this.roadHeight - 0.05, -roadLength); 
+    
+    // Add body to physics world
+    this.physics.addBody(extRoadBody);
   }
   
   /**
@@ -286,6 +346,33 @@ export class TerrainGenerator {
     
     // Add to scene
     this.scene.add(this.road);
+    
+    // Create extended road ahead
+    this.createExtendedRoadMesh(roadMaterial, roadWidth, roadLength);
+  }
+  
+  /**
+   * Create an extended road mesh ahead of the main road
+   * @param {THREE.Material} roadMaterial - Road material to use
+   * @param {number} roadWidth - Width of the road
+   * @param {number} roadLength - Length of the road
+   */
+  createExtendedRoadMesh(roadMaterial, roadWidth, roadLength) {
+    // Create extended road geometry
+    const extRoadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
+    extRoadGeometry.rotateX(-Math.PI / 2);
+    
+    // Create extended road mesh
+    const extRoad = new THREE.Mesh(extRoadGeometry, roadMaterial);
+    
+    // Position extended road ahead of the main road
+    extRoad.position.set(0, this.roadHeight + 0.02, -roadLength);
+    
+    // Add road markings
+    this.addRoadMarkings(extRoad, roadWidth, roadLength);
+    
+    // Add to scene
+    this.scene.add(extRoad);
   }
   
   /**
