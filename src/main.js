@@ -58,6 +58,9 @@ class DrivingSimulator {
     // Generate the terrain first
     this.terrain.generate();
     
+    // Set up debug button 
+    this.setupDebugSnowButton();
+    
     console.log("Loading vehicle...");
     // Load vehicle and place it on the terrain after terrain is generated
     this.vehicle.init(this.terrain).then(() => {
@@ -66,8 +69,9 @@ class DrivingSimulator {
       this.cameraManager.init(this.vehicle.chassis);
       
       console.log("Setting up snow effect...");
-      // Set up snow effect
-      this.snowEffect.init();
+      // Set up snow effect with camera reference
+      this.snowEffect.init(this.camera);
+      console.log("Snow effect initialized with camera at position:", this.camera.position);
       
       console.log("Loading complete!");
       // Hide loading screen
@@ -154,15 +158,70 @@ class DrivingSimulator {
     this.scene.background = new THREE.Color(0xdfe9f0);
   }
   
+  setupDebugSnowButton() {
+    const debugSnowButton = document.getElementById('debug-snow');
+    if (debugSnowButton) {
+      debugSnowButton.addEventListener('click', () => {
+        console.log("Force snow button clicked");
+        
+        // Make sure snow is visible
+        if (this.snowEffect) {
+          // Reinitialize snow with the current camera
+          console.log("Reinitializing snow with camera at position:", this.camera.position);
+          
+          // Remove any existing snow
+          if (this.snowEffect.particleSystem && this.snowEffect.particleSystem.parent) {
+            this.snowEffect.particleSystem.parent.remove(this.snowEffect.particleSystem);
+          }
+          
+          // Reinitialize with current camera
+          this.snowEffect.init(this.camera);
+          
+          // Set to maximum intensity
+          this.snowEffect.setIntensity(1.0);
+          
+          // Update snow slider
+          const snowSlider = document.getElementById('snow-intensity');
+          if (snowSlider) {
+            snowSlider.value = 100;
+          }
+          
+          // Make sure it's visible
+          if (this.snowEffect.particleSystem) {
+            this.snowEffect.particleSystem.visible = true;
+            console.log("Snow system visible:", this.snowEffect.particleSystem.visible);
+            console.log("Snow particle count:", this.snowEffect.particleCount);
+            console.log("Snow intensity:", this.snowEffect.intensity);
+          }
+        }
+      });
+    }
+  }
+  
   setupUIControls() {
     // Camera toggle button
     document.getElementById('camera-toggle').addEventListener('click', () => {
       this.cameraManager.toggleCameraMode();
+      console.log("Camera mode toggled to:", this.cameraManager.currentMode);
     });
     
+    // Set high initial snow intensity
+    const initialSnowIntensity = 0.8;
+    
     // Snow intensity slider
-    document.getElementById('snow-intensity').addEventListener('input', (e) => {
+    const snowSlider = document.getElementById('snow-intensity');
+    // Update slider value to match initial intensity
+    if (snowSlider) {
+      snowSlider.value = initialSnowIntensity * 100;
+    }
+    
+    // Set initial snow intensity
+    this.snowEffect.setIntensity(initialSnowIntensity);
+    
+    // Add listener for slider changes
+    snowSlider.addEventListener('input', (e) => {
       const intensity = e.target.value / 100;
+      console.log("Snow intensity set to:", intensity);
       this.snowEffect.setIntensity(intensity);
     });
     
@@ -206,6 +265,9 @@ class DrivingSimulator {
     // Update physics
     this.physics.update(delta);
     
+    // Get current vehicle speed
+    const vehicleSpeed = this.vehicle.getSpeed();
+    
     // Only update vehicle controls if game has started
     if (this.gameStarted) {
       // Update vehicle with current inputs
@@ -225,13 +287,16 @@ class DrivingSimulator {
     // Update camera
     this.cameraManager.update(delta);
     
-    // Update snow effect
-    this.snowEffect.update(delta);
+    // Update snow effect with current vehicle speed
+    if (this.snowEffect) {
+      this.snowEffect.updateVehicleSpeed(vehicleSpeed);
+      this.snowEffect.update(delta);
+    }
     
     // Update UI
     const speedElement = document.getElementById('speed');
     if (speedElement) {
-      speedElement.textContent = `Speed: ${Math.round(this.vehicle.getSpeed())} km/h`;
+      speedElement.textContent = `Speed: ${Math.round(vehicleSpeed)} km/h`;
     }
     
     // Render

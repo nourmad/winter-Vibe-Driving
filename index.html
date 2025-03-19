@@ -141,8 +141,9 @@
     <button id="camera-toggle">Toggle Camera View</button>
     <div>
       <label for="snow-intensity">Snow Intensity</label>
-      <input type="range" id="snow-intensity" min="0" max="100" value="50">
+      <input type="range" id="snow-intensity" min="0" max="100" value="80">
     </div>
+    <button id="debug-snow">DEBUG: Force Snow</button>
   </div>
   
   <div id="hud">
@@ -248,6 +249,12 @@
         location.reload();
       });
     }
+    
+    // Debug snow button handler - will be connected in main.js
+    document.getElementById('debug-snow').addEventListener('click', function() {
+      console.log("Debug snow button clicked");
+      // The actual handler is added in main.js
+    });
   </script>
   
   <script type="module" src="./src/main.js"></script>
